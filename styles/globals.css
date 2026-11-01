@@ -840,6 +840,14 @@ body {
   flex-direction: column;
   box-shadow: var(--shadow-lg);
   animation: modalEnter 0.2s ease-out;
+  overflow: hidden;
+}
+
+.modal-card form {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(90vh - 65px);
+  overflow: hidden;
 }
 
 @keyframes modalEnter {
@@ -851,8 +859,9 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 20px 24px;
+  padding: 18px 24px;
   border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
 }
 
 .modal-title {
@@ -866,6 +875,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  flex: 1;
 }
 
 .modal-footer {
@@ -875,6 +885,8 @@ body {
   align-items: center;
   justify-content: flex-end;
   gap: 12px;
+  flex-shrink: 0;
+  background-color: var(--bg-surface);
 }
 
 .form-group {
