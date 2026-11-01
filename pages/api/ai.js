@@ -112,36 +112,14 @@ Return a JSON array of meal assignments:
       return res.status(400).json({ error: 'Unknown action: ' + action });
     }
 
-    // Determine target model directly
-    // Google API now requires gemini-3.8-flash for new users
-    let targetModel = 'gemini-3.8-flash';
-    try {
-      const listRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${activeKey}`, {
-        signal: AbortSignal.timeout(3500)
-      });
-      if (listRes.ok) {
-        const listData = await listRes.json();
-        const available = (listData.models || [])
-          .filter(m => m.supportedGenerationMethods && m.supportedGenerationMethods.includes('generateContent'))
-          .map(m => m.name.replace(/^models\//, ''));
-
-        // Pick latest available flash model
-        const preferred = available.find(m => m === 'gemini-3.8-flash') ||
-                          available.find(m => m.includes('3.8')) ||
-                          available.find(m => m.includes('flash')) ||
-                          available[0];
-        if (preferred) targetModel = preferred;
-      }
-    } catch (e) {
-      targetModel = 'gemini-3.8-flash';
-    }
-
-    // Call chosen model directly with 10s timeout
+    // Target gemini-3.8-flash directly with a generous 25-second timeout
+    const targetModel = 'gemini-3.8-flash';
     const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${targetModel}:generateContent?key=${activeKey}`;
+
     const response = await fetch(geminiUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      signal: AbortSignal.timeout(10000),
+      signal: AbortSignal.timeout(25000),
       body: JSON.stringify({
         contents: [{ role: 'user', parts: [{ text: prompt }] }],
         generationConfig: {
