@@ -140,20 +140,61 @@ export default function Home() {
         }
 
         // Auto-reflect all recipe ingredients into pantry (0 quantity if not yet stocked)
+        // Match by ingredient name alone so custom units (e.g. 500g cumin seeds vs 1 tsp in recipe) are NOT duplicated
         const activePantry = (pantryData && pantryData.length > 0) ? pantryData : [];
+
+        // Clean any existing duplicate 0-quantity items where a stocked version already exists
+        const deduplicatedActivePantry = [];
+        const duplicate0IdsToDelete = [];
+        const seenNames = new Map();
+
+        activePantry.forEach(p => {
+          const key = p.name.toLowerCase().trim();
+          if (!seenNames.has(key)) {
+            seenNames.set(key, p);
+            deduplicatedActivePantry.push(p);
+          } else {
+            const existing = seenNames.get(key);
+            // If current item has stock and existing has 0, keep current and mark existing for deletion
+            if ((parseFloat(p.quantity) || 0) > 0 && (parseFloat(existing.quantity) || 0) <= 0) {
+              duplicate0IdsToDelete.push(existing.id);
+              const idx = deduplicatedActivePantry.findIndex(item => item.id === existing.id);
+              if (idx !== -1) deduplicatedActivePantry[idx] = p;
+              seenNames.set(key, p);
+            } else if ((parseFloat(p.quantity) || 0) <= 0) {
+              // Current item is 0-stock duplicate, mark for deletion
+              duplicate0IdsToDelete.push(p.id);
+            } else {
+              // Both have positive stock; keep existing
+              duplicate0IdsToDelete.push(p.id);
+            }
+          }
+        });
+
+        if (duplicate0IdsToDelete.length > 0) {
+          setPantry(deduplicatedActivePantry);
+          localStorage.setItem('dietcraft_pantry', JSON.stringify(deduplicatedActivePantry));
+          duplicate0IdsToDelete.forEach(delId => {
+            if (typeof delId === 'number' && delId < 1000000000000) {
+              supabase.from('pantry').delete().eq('id', delId).then(() => {}).catch(() => {});
+            }
+          });
+        }
+
         const missingRecipeIngredients = [];
         (recData || []).forEach(r => {
           (r.ingredients || []).forEach(ing => {
             const ingName = (ing.name || '').trim();
             const ingUnit = (ing.unit || 'pcs').trim();
             if (!ingName) return;
-            const alreadyExists = activePantry.some(
-              p => p.name.toLowerCase().trim() === ingName.toLowerCase() &&
-                   p.unit.toLowerCase().trim() === ingUnit.toLowerCase()
+
+            // Check by name alone: if the pantry already has cumin seeds (in any unit), do NOT create a 0-qty duplicate!
+            const alreadyExists = deduplicatedActivePantry.some(
+              p => p.name.toLowerCase().trim() === ingName.toLowerCase()
             ) || missingRecipeIngredients.some(
-              m => m.name.toLowerCase().trim() === ingName.toLowerCase() &&
-                   m.unit.toLowerCase().trim() === ingUnit.toLowerCase()
+              m => m.name.toLowerCase().trim() === ingName.toLowerCase()
             );
+
             if (!alreadyExists) {
               missingRecipeIngredients.push({
                 name: ingName,
@@ -168,15 +209,25 @@ export default function Home() {
         });
 
         if (missingRecipeIngredients.length > 0) {
-          const combinedPantry = [...activePantry, ...missingRecipeIngredients.map(m => ({ ...m, id: Date.now() + Math.random() }))];
+          const combinedPantry = [...deduplicatedActivePantry, ...missingRecipeIngredients.map(m => ({ ...m, id: Date.now() + Math.random() }))];
           setPantry(combinedPantry);
           localStorage.setItem('dietcraft_pantry', JSON.stringify(combinedPantry));
           supabase.from('pantry').upsert(missingRecipeIngredients, { onConflict: 'name, unit' }).select().then(({ data: added }) => {
             if (added && added.length > 0) {
               supabase.from('pantry').select('*').order('name', { ascending: true }).then(({ data: refreshed }) => {
                 if (refreshed) {
-                  setPantry(refreshed);
-                  localStorage.setItem('dietcraft_pantry', JSON.stringify(refreshed));
+                  // Keep deduplicated view
+                  const dedup = [];
+                  const seen = new Set();
+                  refreshed.forEach(item => {
+                    const k = item.name.toLowerCase().trim();
+                    if (!seen.has(k)) {
+                      seen.add(k);
+                      dedup.push(item);
+                    }
+                  });
+                  setPantry(dedup);
+                  localStorage.setItem('dietcraft_pantry', JSON.stringify(dedup));
                 }
               });
             }
@@ -208,6 +259,27 @@ export default function Home() {
         const localPantry = localStorage.getItem('dietcraft_pantry');
         let localPantryParsed = localPantry ? JSON.parse(localPantry) : [];
 
+        // Deduplicate local storage pantry items by name, prioritizing stocked items over 0-qty
+        const dedupLocalPantry = [];
+        const seenLocal = new Map();
+        localPantryParsed.forEach(p => {
+          const k = p.name.toLowerCase().trim();
+          if (!seenLocal.has(k)) {
+            seenLocal.set(k, p);
+            dedupLocalPantry.push(p);
+          } else {
+            const existing = seenLocal.get(k);
+            if ((parseFloat(p.quantity) || 0) > 0 && (parseFloat(existing.quantity) || 0) <= 0) {
+              const idx = dedupLocalPantry.findIndex(item => item.id === existing.id);
+              if (idx !== -1) dedupLocalPantry[idx] = p;
+              seenLocal.set(k, p);
+            }
+          }
+        });
+        localPantryParsed = dedupLocalPantry;
+        setPantry(dedupLocalPantry);
+        localStorage.setItem('dietcraft_pantry', JSON.stringify(dedupLocalPantry));
+
         // Auto-mirror local recipe ingredients into pantry
         const missingLocalIngs = [];
         localRecParsed.forEach(r => {
@@ -216,11 +288,9 @@ export default function Home() {
             const ingUnit = (ing.unit || 'pcs').trim();
             if (!ingName) return;
             const exists = localPantryParsed.some(
-              p => p.name.toLowerCase().trim() === ingName.toLowerCase() &&
-                   p.unit.toLowerCase().trim() === ingUnit.toLowerCase()
+              p => p.name.toLowerCase().trim() === ingName.toLowerCase()
             ) || missingLocalIngs.some(
-              m => m.name.toLowerCase().trim() === ingName.toLowerCase() &&
-                   m.unit.toLowerCase().trim() === ingUnit.toLowerCase()
+              m => m.name.toLowerCase().trim() === ingName.toLowerCase()
             );
             if (!exists) {
               missingLocalIngs.push({
@@ -379,9 +449,9 @@ export default function Home() {
       const category = ing.category || 'Pantry';
       if (!name) return;
 
+      // Match by name alone: if the pantry already has cumin seeds (in any unit), do NOT create a 0-qty duplicate
       const exists = updatedPantry.some(
-        p => p.name.toLowerCase().trim() === name.toLowerCase() &&
-             p.unit.toLowerCase().trim() === unit.toLowerCase()
+        p => p.name.toLowerCase().trim() === name.toLowerCase()
       );
 
       if (!exists) {
@@ -642,10 +712,18 @@ export default function Home() {
 
       let updatedPantry;
       if (existingIdx >= 0) {
-        updatedPantry = [...pantry];
-        updatedPantry[existingIdx] = savedItem;
+        // Replace existing item and filter out any other duplicates of the same name
+        updatedPantry = pantry.map((p, idx) => {
+          if (idx === existingIdx) return savedItem;
+          return p;
+        }).filter((p, idx) => {
+          if (idx === existingIdx) return true;
+          // Filter out other duplicate entries with the same name
+          return p.name.toLowerCase().trim() !== savedItem.name.toLowerCase().trim();
+        });
       } else {
-        updatedPantry = [savedItem, ...pantry];
+        // Filter out any 0-qty item with same name and prepend
+        updatedPantry = [savedItem, ...pantry.filter(p => p.name.toLowerCase().trim() !== savedItem.name.toLowerCase().trim())];
       }
 
       setPantry(updatedPantry);
