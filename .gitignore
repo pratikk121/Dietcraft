@@ -5,3 +5,4 @@ data/*.pem
 .env.local
 .DS_Store
 *.log
+test-playwright.js

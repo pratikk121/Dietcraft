@@ -38,9 +38,12 @@ export default function Home() {
   // AI Assistant State
   const [geminiApiKey, setGeminiApiKey] = useState('');
   const [aiChefModal, setAiChefModal] = useState(false);
+  const [aiChefServings, setAiChefServings] = useState(1);
+  const [recipeDetailServings, setRecipeDetailServings] = useState(1);
   const [aiRecipeResults, setAiRecipeResults] = useState(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiImportModal, setAiImportModal] = useState(false);
+  const [aiImportServings, setAiImportServings] = useState(1);
   const [aiImportText, setAiImportText] = useState('');
   const [aiSmartPlanModal, setAiSmartPlanModal] = useState(false);
   const [aiDietaryNotes, setAiDietaryNotes] = useState('');
@@ -300,6 +303,12 @@ export default function Home() {
     }
     setIsEditingRecipe(false);
     showToast('Recipe saved successfully!');
+  };
+
+  // Open Recipe Detail with Serving Scaler
+  const handleOpenRecipeDetail = (recipe) => {
+    setSelectedRecipeDetail(recipe);
+    setRecipeDetailServings(recipe ? (recipe.servings || 1) : 1);
   };
 
   // Delete Recipe
@@ -643,7 +652,7 @@ export default function Home() {
   };
 
   // AI Action: Ask what to cook from pantry
-  const handleAskAiChef = async () => {
+  const handleAskAiChef = async (targetServings = aiChefServings) => {
     if (pantry.length === 0) {
       showToast('Your pantry is empty! Add ingredients first.');
       return;
@@ -652,7 +661,13 @@ export default function Home() {
     setAiRecipeResults(null);
 
     const availablePantry = pantry.filter(p => (parseFloat(p.quantity) || 0) > 0);
-    const result = await callAiEndpoint('suggest_from_pantry', { pantry: availablePantry });
+    const result = await callAiEndpoint('suggest_from_pantry', { 
+      pantry: availablePantry,
+      servings: targetServings,
+      preferences: targetServings === 1 
+        ? 'Cook for 1 person living a disciplined structured life, high protein, minimal cleanup, zero waste'
+        : 'Cook 2 servings (dinner plus pack tomorrow lunch), high protein, minimal cleanup'
+    });
     if (result && result.suggestions) {
       setAiRecipeResults(result.suggestions);
     }
@@ -661,7 +676,7 @@ export default function Home() {
   // AI Action: Import raw recipe text
   const handleAiParseRecipe = async () => {
     if (!aiImportText.trim()) return;
-    const result = await callAiEndpoint('parse_recipe', { text: aiImportText });
+    const result = await callAiEndpoint('parse_recipe', { text: aiImportText, servings: aiImportServings });
     if (result && result.recipe) {
       setEditingRecipe({
         ...result.recipe,
@@ -670,12 +685,12 @@ export default function Home() {
       setIsEditingRecipe(true);
       setAiImportModal(false);
       setAiImportText('');
-      showToast('Recipe parsed by AI! Review and save.');
+      showToast(`Recipe adapted for ${aiImportServings} serving(s) by AI!`);
     }
   };
 
   // AI Action: Smart Meal Plan Generation
-  const handleAiSmartPlan = async (startDate, endDate, mealsToPlan, targetCalories, dietaryNotes) => {
+  const handleAiSmartPlan = async (startDate, endDate, mealsToPlan, targetCalories, dietaryNotes, targetServings = 1) => {
     const result = await callAiEndpoint('smart_plan', {
       startDate,
       endDate,
@@ -683,7 +698,8 @@ export default function Home() {
       recipes,
       mealsToPlan,
       targetCalories,
-      dietaryNotes
+      dietaryNotes,
+      servings: targetServings
     });
 
     if (result && result.plan) {
@@ -697,7 +713,7 @@ export default function Home() {
           meal_type: item.meal_type.toLowerCase(),
           recipe_id: item.recipe_id || null,
           custom_title: item.recipe_id ? null : item.meal_name,
-          servings: 2
+          servings: item.servings || targetServings || 1
         });
       });
 
@@ -967,13 +983,31 @@ export default function Home() {
                   </div>
                 ) : (
                   filteredRecipes.map(r => (
-                    <div key={r.id} className="recipe-card" onClick={() => setSelectedRecipeDetail(r)}>
+                    <div key={r.id} className="recipe-card" onClick={() => handleOpenRecipeDetail(r)}>
                       <div className="recipe-card-header">
                         <span className={`recipe-category-badge badge-${r.category.toLowerCase()}`}>{r.category}</span>
-                        <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{r.servings} Servings</span>
+                        <span style={{ 
+                          fontSize: '0.78rem', 
+                          fontWeight: r.servings === 1 ? 600 : 400,
+                          color: r.servings === 1 ? '#34d399' : 'var(--text-muted)',
+                          background: r.servings === 1 ? 'rgba(52, 211, 153, 0.1)' : 'transparent',
+                          padding: r.servings === 1 ? '2px 6px' : '0',
+                          borderRadius: '4px'
+                        }}>
+                          {r.servings === 1 ? '👤 1 Serving' : `👥 ${r.servings || 1} Servings`}
+                        </span>
                       </div>
                       <h3 className="recipe-title">{r.title}</h3>
                       <p className="recipe-desc">{r.description || 'No description provided.'}</p>
+                      {r.tags && (
+                        <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginBottom: '8px' }}>
+                          {r.tags.split(',').slice(0, 3).map((t, idx) => (
+                            <span key={idx} style={{ fontSize: '0.72rem', background: 'var(--bg-surface)', padding: '2px 6px', borderRadius: '4px', border: '1px solid var(--border-color)', color: 'var(--text-secondary)' }}>
+                              {t.trim()}
+                            </span>
+                          ))}
+                        </div>
+                      )}
                       <div className="recipe-meta-row">
                         <span>⏱️ {(r.prep_time || 0) + (r.cook_time || 0)}m total</span>
                         <span>🥗 {r.ingredients ? r.ingredients.length : 0} ingredients</span>
@@ -1054,7 +1088,7 @@ export default function Home() {
                           <span className="day-number">{day}</span>
                           <span className="day-weekday-label">· {weekdayShort}</span>
                         </div>
-                        <button className="day-add-btn" title="Add meal" onClick={() => setMealPlanModal({ date: dateStr, meal_type: 'dinner', servings: 2 })}>+</button>
+                        <button className="day-add-btn" title="Add meal" onClick={() => setMealPlanModal({ date: dateStr, meal_type: 'dinner', servings: 1 })}>+</button>
                       </div>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                         {dayMeals.map(m => {
@@ -1555,24 +1589,76 @@ export default function Home() {
               <button className="btn btn-secondary btn-sm btn-icon" onClick={() => setSelectedRecipeDetail(null)}>✕</button>
             </div>
             <div className="modal-body">
-              <div style={{ display: 'flex', gap: '10px', marginBottom: '14px', flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', gap: '8px', marginBottom: '14px', flexWrap: 'wrap', alignItems: 'center' }}>
                 <span className={`recipe-category-badge badge-${selectedRecipeDetail.category.toLowerCase()}`}>{selectedRecipeDetail.category}</span>
-                <span style={{ color: 'var(--text-secondary)', fontSize: '0.88rem' }}>👥 {selectedRecipeDetail.servings} Servings</span>
                 <span style={{ color: 'var(--text-secondary)', fontSize: '0.88rem' }}>⏱️ Prep: {selectedRecipeDetail.prep_time}m | Cook: {selectedRecipeDetail.cook_time}m</span>
               </div>
-              {selectedRecipeDetail.description && <p style={{ color: 'var(--text-secondary)', fontStyle: 'italic', marginBottom: '16px' }}>{selectedRecipeDetail.description}</p>}
+              {selectedRecipeDetail.description && <p style={{ color: 'var(--text-secondary)', fontStyle: 'italic', marginBottom: '14px' }}>{selectedRecipeDetail.description}</p>}
 
-              <h4 style={{ color: '#34d399', marginBottom: '8px' }}>Ingredients</h4>
+              {/* Dynamic Portion Scaler for Disciplined Living */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px', background: 'var(--bg-surface)', padding: '8px 12px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', marginBottom: '16px' }}>
+                <div style={{ fontSize: '0.84rem', color: 'var(--text-secondary)' }}>
+                  <strong>Portions Scaler:</strong> Showing for <strong style={{ color: '#34d399' }}>{recipeDetailServings} Person{recipeDetailServings > 1 ? 's' : ''}</strong>
+                </div>
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  <button 
+                    type="button" 
+                    className={`btn btn-sm ${recipeDetailServings === 1 ? 'btn-primary' : 'btn-secondary'}`}
+                    style={{ padding: '3px 10px', fontSize: '0.78rem' }}
+                    onClick={() => setRecipeDetailServings(1)}
+                  >
+                    👤 1 Person (Single)
+                  </button>
+                  <button 
+                    type="button" 
+                    className={`btn btn-sm ${recipeDetailServings === 2 ? 'btn-primary' : 'btn-secondary'}`}
+                    style={{ padding: '3px 10px', fontSize: '0.78rem' }}
+                    onClick={() => setRecipeDetailServings(2)}
+                  >
+                    🍱 2 People (Batch)
+                  </button>
+                  {(selectedRecipeDetail.servings || 1) !== 1 && (selectedRecipeDetail.servings || 1) !== 2 && (
+                    <button 
+                      type="button" 
+                      className={`btn btn-sm ${recipeDetailServings === selectedRecipeDetail.servings ? 'btn-primary' : 'btn-secondary'}`}
+                      style={{ padding: '3px 10px', fontSize: '0.78rem' }}
+                      onClick={() => setRecipeDetailServings(selectedRecipeDetail.servings)}
+                    >
+                      Orig ({selectedRecipeDetail.servings})
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {selectedRecipeDetail.tags && (
+                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '14px' }}>
+                  {selectedRecipeDetail.tags.split(',').map((tag, idx) => (
+                    <span key={idx} style={{ fontSize: '0.75rem', background: 'rgba(52, 211, 153, 0.1)', color: '#34d399', border: '1px solid rgba(52, 211, 153, 0.25)', padding: '2px 8px', borderRadius: '12px' }}>
+                      {tag.trim()}
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              <h4 style={{ color: '#34d399', marginBottom: '8px' }}>
+                Ingredients {recipeDetailServings === 1 ? '(Scaled for 1 Person)' : `(Scaled for ${recipeDetailServings} People)`}
+              </h4>
               <ul style={{ listStyle: 'none', marginBottom: '20px' }}>
-                {selectedRecipeDetail.ingredients?.map((ing, idx) => (
-                  <li key={idx} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                    <span>{ing.name} <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>({ing.category})</span></span>
-                    <strong style={{ color: '#34d399' }}>{ing.quantity} {ing.unit}</strong>
-                  </li>
-                ))}
+                {selectedRecipeDetail.ingredients?.map((ing, idx) => {
+                  const origServings = selectedRecipeDetail.servings || 1;
+                  const scaleFactor = recipeDetailServings / origServings;
+                  const rawVal = (parseFloat(ing.quantity) || 1) * scaleFactor;
+                  const displayQty = Math.round(rawVal * 100) / 100;
+                  return (
+                    <li key={idx} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                      <span>{ing.name} <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>({ing.category})</span></span>
+                      <strong style={{ color: '#34d399' }}>{displayQty} {ing.unit}</strong>
+                    </li>
+                  );
+                })}
               </ul>
 
-              <h4 style={{ color: '#34d399', marginBottom: '8px' }}>Instructions</h4>
+              <h4 style={{ color: '#34d399', marginBottom: '8px' }}>Cooking Instructions</h4>
               <div style={{ whiteSpace: 'pre-line', lineHeight: 1.6, background: 'var(--bg-card)', padding: '14px', borderRadius: 'var(--radius-md)' }}>
                 {selectedRecipeDetail.instructions || 'No instructions provided.'}
               </div>
@@ -1612,7 +1698,7 @@ export default function Home() {
                 meal_type: fd.get('meal_type'),
                 recipe_id: recipeId ? parseInt(recipeId, 10) : null,
                 custom_title: customTitle || null,
-                servings: parseInt(fd.get('servings'), 10) || 2
+                servings: parseInt(fd.get('servings'), 10) || 1
               });
             }}>
               <div className="modal-body">
@@ -1640,7 +1726,7 @@ export default function Home() {
                 </div>
                 <div className="form-group">
                   <label className="form-label">Planned Servings (automatically scales groceries)</label>
-                  <input type="number" name="servings" defaultValue={mealPlanModal.servings || 2} min="1" className="form-control" required />
+                  <input type="number" name="servings" defaultValue={mealPlanModal.servings || 1} min="1" className="form-control" required />
                 </div>
               </div>
               <div className="modal-footer">
@@ -1674,7 +1760,7 @@ export default function Home() {
                 fd.get('start_date'),
                 fd.get('end_date'),
                 meals,
-                parseInt(fd.get('servings'), 10) || 2
+                parseInt(fd.get('servings'), 10) || 1
               );
             }}>
               <div className="modal-body">
@@ -1701,7 +1787,7 @@ export default function Home() {
                 </div>
                 <div className="form-group">
                   <label className="form-label">Default Servings</label>
-                  <input type="number" name="servings" defaultValue="2" min="1" className="form-control" required />
+                  <input type="number" name="servings" defaultValue="1" min="1" className="form-control" required />
                 </div>
               </div>
               <div className="modal-footer">
@@ -1965,37 +2051,120 @@ export default function Home() {
       {/* 9. AI Chef Modal: Suggest Dishes from Pantry */}
       {aiChefModal && (
         <div className="modal-backdrop active" onClick={() => setAiChefModal(false)}>
-          <div className="modal-card" style={{ maxWidth: '650px' }} onClick={e => e.stopPropagation()}>
+          <div className="modal-card" style={{ maxWidth: '680px' }} onClick={e => e.stopPropagation()}>
             <div className="modal-header">
-              <h3 className="modal-title">✨ AI Chef · Recipes From Your Pantry</h3>
+              <h3 className="modal-title">✨ AI Chef · Single-Living Kitchen Intelligence</h3>
               <button className="btn btn-secondary btn-sm btn-icon" onClick={() => setAiChefModal(false)}>✕</button>
             </div>
-            <div className="modal-body" style={{ maxHeight: '70vh', overflowY: 'auto' }}>
+            <div className="modal-body" style={{ maxHeight: '72vh', overflowY: 'auto' }}>
+              {/* Routine & Servings Mode Switcher */}
+              <div style={{ background: 'var(--bg-surface)', padding: '12px 14px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', marginBottom: '16px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+                  <div>
+                    <div style={{ fontWeight: 600, fontSize: '0.88rem', color: 'var(--text-primary)' }}>🎯 Structured Portion Target</div>
+                    <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>Calibrated specifically for your single-living routine & minimal cleanup.</div>
+                  </div>
+                  <div style={{ display: 'flex', gap: '6px' }}>
+                    <button 
+                      type="button" 
+                      className={`btn btn-sm ${aiChefServings === 1 ? 'btn-primary' : 'btn-secondary'}`}
+                      style={{ padding: '4px 10px', fontSize: '0.78rem' }}
+                      disabled={aiLoading}
+                      onClick={() => {
+                        setAiChefServings(1);
+                        handleAskAiChef(1);
+                      }}
+                    >
+                      👤 Cook for 1 (Single)
+                    </button>
+                    <button 
+                      type="button" 
+                      className={`btn btn-sm ${aiChefServings === 2 ? 'btn-primary' : 'btn-secondary'}`}
+                      style={{ padding: '4px 10px', fontSize: '0.78rem' }}
+                      disabled={aiLoading}
+                      onClick={() => {
+                        setAiChefServings(2);
+                        handleAskAiChef(2);
+                      }}
+                    >
+                      🍱 Cook 2 (Dinner + Lunch)
+                    </button>
+                  </div>
+                </div>
+              </div>
+
               {aiLoading ? (
                 <div style={{ textAlign: 'center', padding: '40px 20px' }}>
                   <div style={{ fontSize: '2.5rem', marginBottom: '12px', animation: 'spin 2s linear infinite' }}>🍲</div>
-                  <p style={{ fontWeight: 600, color: 'var(--text-primary)', marginBottom: '6px' }}>AI Chef is inspecting your pantry ingredients...</p>
-                  <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Creating custom recipe ideas minimizing extra grocery trips.</p>
+                  <p style={{ fontWeight: 600, color: 'var(--text-primary)', marginBottom: '6px' }}>
+                    AI Chef is calibrating single-person recipes for {aiChefServings} serving(s)...
+                  </p>
+                  <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                    Calculating nutrition, minimizing ingredient waste, and ensuring rapid preparation.
+                  </p>
                 </div>
               ) : aiRecipeResults ? (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                  <p style={{ fontSize: '0.88rem', color: 'var(--text-secondary)' }}>
-                    Here are personalized dish ideas you can make right now based on what's currently in your kitchen:
+                  <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                    Here are personalized meals scaled for <strong style={{ color: '#34d399' }}>{aiChefServings} serving{aiChefServings > 1 ? 's' : ''}</strong> using what is in your kitchen right now:
                   </p>
                   {aiRecipeResults.map((sug, idx) => (
                     <div key={idx} style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '16px' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '6px', flexWrap: 'wrap', gap: '6px' }}>
-                        <h4 style={{ fontSize: '1.05rem', fontWeight: 700, color: '#34d399' }}>{sug.title}</h4>
-                        <span style={{ fontSize: '0.78rem', background: 'rgba(52, 211, 153, 0.1)', color: '#34d399', padding: '2px 8px', borderRadius: '4px' }}>
-                          ⏱️ {sug.estimated_time || '20m'} · {sug.category || 'Dinner'}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px', flexWrap: 'wrap', gap: '6px' }}>
+                        <div>
+                          <h4 style={{ fontSize: '1.08rem', fontWeight: 700, color: '#34d399', marginBottom: '4px' }}>{sug.title}</h4>
+                          <span style={{ fontSize: '0.75rem', background: 'rgba(52, 211, 153, 0.1)', color: '#34d399', padding: '2px 8px', borderRadius: '4px', marginRight: '6px' }}>
+                            👤 {sug.servings || aiChefServings} Serving{(sug.servings || aiChefServings) > 1 ? 's' : ''}
+                          </span>
+                          <span style={{ fontSize: '0.75rem', background: 'var(--bg-card)', color: 'var(--text-secondary)', padding: '2px 8px', borderRadius: '4px', border: '1px solid var(--border-color)' }}>
+                            ⏱️ {(sug.prep_time || 10) + (sug.cook_time || 15)}m total · {sug.category || 'Dinner'}
+                          </span>
+                        </div>
+                      </div>
+
+                      <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '10px' }}>{sug.description}</p>
+
+                      {/* Nutritional Macros Breakdown */}
+                      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '12px' }}>
+                        <span style={{ fontSize: '0.78rem', background: 'rgba(239, 68, 68, 0.1)', color: '#f87171', padding: '3px 8px', borderRadius: '6px', fontWeight: 600 }}>
+                          🔥 {sug.calories || 420} kcal
+                        </span>
+                        <span style={{ fontSize: '0.78rem', background: 'rgba(59, 130, 246, 0.1)', color: '#60a5fa', padding: '3px 8px', borderRadius: '6px', fontWeight: 600 }}>
+                          🥩 {sug.protein_g || 28}g Protein
+                        </span>
+                        <span style={{ fontSize: '0.78rem', background: 'rgba(245, 158, 11, 0.1)', color: '#fbbf24', padding: '3px 8px', borderRadius: '6px', fontWeight: 600 }}>
+                          🍞 {sug.carbs_g || 35}g Carbs
+                        </span>
+                        <span style={{ fontSize: '0.78rem', background: 'rgba(16, 185, 129, 0.1)', color: '#34d399', padding: '3px 8px', borderRadius: '6px', fontWeight: 600 }}>
+                          🥑 {sug.fat_g || 14}g Fat
                         </span>
                       </div>
-                      <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '10px' }}>{sug.description}</p>
+
+                      {/* Structured Habit Tip */}
+                      {sug.single_person_tip && (
+                        <div style={{ background: 'rgba(52, 211, 153, 0.08)', borderLeft: '3px solid #34d399', padding: '8px 12px', borderRadius: '4px', fontSize: '0.82rem', color: 'var(--text-secondary)', marginBottom: '12px' }}>
+                          <strong style={{ color: '#34d399' }}>💡 Disciplined Habit:</strong> {sug.single_person_tip}
+                        </div>
+                      )}
                       
-                      <div style={{ fontSize: '0.82rem', marginBottom: '8px' }}>
-                        <strong style={{ color: 'var(--text-primary)' }}>Pantry ingredients used:</strong>{' '}
-                        <span style={{ color: 'var(--text-secondary)' }}>{(sug.used_pantry_items || []).join(', ')}</span>
+                      {/* Scaled Ingredients */}
+                      <div style={{ fontSize: '0.82rem', marginBottom: '10px' }}>
+                        <strong style={{ color: 'var(--text-primary)', display: 'block', marginBottom: '4px' }}>
+                          Exact Scaled Ingredients for {sug.servings || aiChefServings} Serving:
+                        </strong>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                          {sug.ingredients && sug.ingredients.length > 0 ? (
+                            sug.ingredients.map((ing, iIdx) => (
+                              <span key={iIdx} style={{ background: 'var(--bg-card)', padding: '3px 8px', borderRadius: '4px', border: '1px solid var(--border-color)', color: 'var(--text-secondary)' }}>
+                                {ing.quantity} {ing.unit} {ing.name}
+                              </span>
+                            ))
+                          ) : (
+                            <span style={{ color: 'var(--text-secondary)' }}>{(sug.used_pantry_items || []).join(', ')}</span>
+                          )}
+                        </div>
                       </div>
+
                       {sug.missing_items && sug.missing_items.length > 0 && (
                         <div style={{ fontSize: '0.82rem', marginBottom: '10px' }}>
                           <strong style={{ color: '#f59e0b' }}>Optional / Missing items:</strong>{' '}
@@ -2003,19 +2172,34 @@ export default function Home() {
                         </div>
                       )}
 
+                      {/* Instructions Preview */}
+                      {sug.instructions && (
+                        <div style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', whiteSpace: 'pre-line', background: 'var(--bg-card)', padding: '10px 12px', borderRadius: 'var(--radius-sm)', marginBottom: '12px', maxHeight: '120px', overflowY: 'auto' }}>
+                          {sug.instructions}
+                        </div>
+                      )}
+
                       <button 
                         className="btn btn-primary btn-sm"
-                        style={{ marginTop: '6px' }}
+                        style={{ marginTop: '4px' }}
                         onClick={() => {
+                          const targetServ = sug.servings || aiChefServings || 1;
+                          const macroTags = [
+                            targetServ === 1 ? '1-Serving' : 'Batch-Cook',
+                            sug.calories ? `${sug.calories} kcal` : '',
+                            sug.protein_g ? `${sug.protein_g}g Protein` : ''
+                          ].filter(Boolean).join(', ');
+
                           setEditingRecipe({
                             title: sug.title,
                             category: sug.category || 'Dinner',
-                            servings: 2,
-                            prep_time: 10,
-                            cook_time: 15,
+                            servings: targetServ,
+                            prep_time: sug.prep_time || 10,
+                            cook_time: sug.cook_time || 15,
                             description: sug.description,
-                            instructions: sug.instructions || 'Prepare ingredients and cook as desired.',
-                            ingredients: (sug.used_pantry_items || []).map(name => {
+                            instructions: sug.instructions || 'Prepare ingredients and cook according to disciplined routine.',
+                            tags: macroTags,
+                            ingredients: sug.ingredients && sug.ingredients.length > 0 ? sug.ingredients : (sug.used_pantry_items || []).map(name => {
                               const found = pantry.find(p => p.name.toLowerCase() === name.toLowerCase());
                               return {
                                 name,
@@ -2029,7 +2213,7 @@ export default function Home() {
                           setAiChefModal(false);
                         }}
                       >
-                        + Save to My Recipes
+                        + Save to My Recipes (Scaled for {sug.servings || aiChefServings})
                       </button>
                     </div>
                   ))}
@@ -2037,7 +2221,7 @@ export default function Home() {
               ) : (
                 <div style={{ textAlign: 'center', padding: '30px', color: 'var(--text-secondary)' }}>
                   <p>Click below to let Gemini analyze your current pantry inventory and generate recipe ideas.</p>
-                  <button className="btn btn-primary" style={{ marginTop: '12px' }} onClick={handleAskAiChef}>
+                  <button className="btn btn-primary" style={{ marginTop: '12px' }} onClick={() => handleAskAiChef(aiChefServings)}>
                     Generate Suggestions
                   </button>
                 </div>
@@ -2060,8 +2244,29 @@ export default function Home() {
             </div>
             <div className="modal-body">
               <p style={{ fontSize: '0.88rem', color: 'var(--text-secondary)', marginBottom: '12px' }}>
-                Paste any unstructured recipe from a website, social media, or family note. Gemini will automatically extract servings, prep/cook times, and parse ingredients with exact quantities and units.
+                Paste any unstructured recipe from a website, social media, or note. Gemini will automatically extract instructions, calculate nutritional macros, and adapt all ingredients for your chosen portion size.
               </p>
+              
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px', background: 'var(--bg-surface)', padding: '8px 12px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)' }}>
+                <span style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', fontWeight: 600 }}>Adapt to:</span>
+                <button 
+                  type="button" 
+                  className={`btn btn-sm ${aiImportServings === 1 ? 'btn-primary' : 'btn-secondary'}`}
+                  style={{ padding: '2px 10px', fontSize: '0.78rem' }}
+                  onClick={() => setAiImportServings(1)}
+                >
+                  👤 1 Person (Single)
+                </button>
+                <button 
+                  type="button" 
+                  className={`btn btn-sm ${aiImportServings === 2 ? 'btn-primary' : 'btn-secondary'}`}
+                  style={{ padding: '2px 10px', fontSize: '0.78rem' }}
+                  onClick={() => setAiImportServings(2)}
+                >
+                  🍱 2 People (Batch)
+                </button>
+              </div>
+
               <div className="form-group">
                 <textarea 
                   rows="9"
@@ -2107,7 +2312,8 @@ export default function Home() {
                 fd.get('end_date'),
                 meals,
                 fd.get('target_calories') ? parseInt(fd.get('target_calories'), 10) : null,
-                aiDietaryNotes
+                aiDietaryNotes,
+                parseInt(fd.get('servings'), 10) || 1
               );
             }}>
               <div className="modal-body">
@@ -2123,6 +2329,13 @@ export default function Home() {
                     <label className="form-label">End Date</label>
                     <input type="date" name="end_date" defaultValue={monthData.endStr} className="form-control" required />
                   </div>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Portion Target</label>
+                  <select name="servings" defaultValue="1" className="form-control">
+                    <option value="1">👤 1 Person (Single-Serving Discipline)</option>
+                    <option value="2">🍱 2 Servings (Cook Dinner + Pack Tomorrow's Lunch)</option>
+                  </select>
                 </div>
                 <div className="form-group">
                   <label className="form-label">Meals to Plan</label>
@@ -2171,7 +2384,7 @@ export default function Home() {
 function RecipeEditorModal({ recipe, onSave, onClose }) {
   const [title, setTitle] = useState(recipe ? recipe.title : '');
   const [category, setCategory] = useState(recipe ? recipe.category : 'Dinner');
-  const [servings, setServings] = useState(recipe ? recipe.servings : 2);
+  const [servings, setServings] = useState(recipe ? (recipe.servings || 1) : 1);
   const [prepTime, setPrepTime] = useState(recipe ? recipe.prep_time : 15);
   const [cookTime, setCookTime] = useState(recipe ? recipe.cook_time : 20);
   const [description, setDescription] = useState(recipe ? recipe.description : '');
@@ -2203,7 +2416,7 @@ function RecipeEditorModal({ recipe, onSave, onClose }) {
       id: recipe ? recipe.id : null,
       title,
       category,
-      servings: parseInt(servings, 10) || 2,
+      servings: parseInt(servings, 10) || 1,
       prep_time: parseInt(prepTime, 10) || 0,
       cook_time: parseInt(cookTime, 10) || 0,
       description,
