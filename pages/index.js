@@ -2329,16 +2329,16 @@ export default function Home() {
         <div className="modal-backdrop active" onClick={() => setAiChefModal(false)}>
           <div className="modal-card" style={{ maxWidth: '680px' }} onClick={e => e.stopPropagation()}>
             <div className="modal-header">
-              <h3 className="modal-title">✨ AI Chef · Single-Living Kitchen Intelligence</h3>
+              <h3 className="modal-title">✨ AI Chef · Suggest Recipes from Pantry</h3>
               <button className="btn btn-secondary btn-sm btn-icon" onClick={() => setAiChefModal(false)}>✕</button>
             </div>
             <div className="modal-body" style={{ maxHeight: '72vh', overflowY: 'auto' }}>
-              {/* Routine & Servings Mode Switcher */}
+              {/* Servings Mode Switcher */}
               <div style={{ background: 'var(--bg-surface)', padding: '12px 14px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', marginBottom: '16px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
                   <div>
-                    <div style={{ fontWeight: 600, fontSize: '0.88rem', color: 'var(--text-primary)' }}>🎯 Structured Portion Target</div>
-                    <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>Calibrated specifically for your single-living routine & minimal cleanup.</div>
+                    <div style={{ fontWeight: 600, fontSize: '0.88rem', color: 'var(--text-primary)' }}>Portion Size</div>
+                    <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>Select how many servings to scale recipe ingredients for.</div>
                   </div>
                   <div style={{ display: 'flex', gap: '6px' }}>
                     <button 
@@ -2351,7 +2351,7 @@ export default function Home() {
                         handleAskAiChef(1);
                       }}
                     >
-                      👤 Cook for 1 (Single)
+                      👤 1 Serving
                     </button>
                     <button 
                       type="button" 
@@ -2363,7 +2363,7 @@ export default function Home() {
                         handleAskAiChef(2);
                       }}
                     >
-                      🍱 Cook 2 (Dinner + Lunch)
+                      🍱 2 Servings
                     </button>
                   </div>
                 </div>
@@ -2373,16 +2373,16 @@ export default function Home() {
                 <div style={{ textAlign: 'center', padding: '40px 20px' }}>
                   <div style={{ fontSize: '2.5rem', marginBottom: '12px', animation: 'spin 2s linear infinite' }}>🍲</div>
                   <p style={{ fontWeight: 600, color: 'var(--text-primary)', marginBottom: '6px' }}>
-                    AI Chef is calibrating single-person recipes for {aiChefServings} serving(s)...
+                    AI Chef is generating recipes for {aiChefServings} serving(s)...
                   </p>
                   <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-                    Calculating nutrition, minimizing ingredient waste, and ensuring rapid preparation.
+                    Matching available ingredients in your pantry.
                   </p>
                 </div>
               ) : aiRecipeResults ? (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                   <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                    Here are personalized meals scaled for <strong style={{ color: '#34d399' }}>{aiChefServings} serving{aiChefServings > 1 ? 's' : ''}</strong> using what is in your kitchen right now:
+                    Suggested recipes for <strong style={{ color: '#34d399' }}>{aiChefServings} serving{aiChefServings > 1 ? 's' : ''}</strong> using ingredients in your kitchen:
                   </p>
                   {aiRecipeResults.map((sug, idx) => (
                     <div key={idx} style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '16px' }}>
@@ -2416,10 +2416,10 @@ export default function Home() {
                         </span>
                       </div>
 
-                      {/* Structured Habit Tip */}
+                      {/* Chef Tip */}
                       {sug.single_person_tip && (
                         <div style={{ background: 'rgba(52, 211, 153, 0.08)', borderLeft: '3px solid #34d399', padding: '8px 12px', borderRadius: '4px', fontSize: '0.82rem', color: 'var(--text-secondary)', marginBottom: '12px' }}>
-                          <strong style={{ color: '#34d399' }}>💡 Disciplined Habit:</strong> {sug.single_person_tip}
+                          <strong style={{ color: '#34d399' }}>💡 Cooking Tip:</strong> {sug.single_person_tip}
                         </div>
                       )}
                       
@@ -2473,7 +2473,7 @@ export default function Home() {
                             prep_time: sug.prep_time || 10,
                             cook_time: sug.cook_time || 15,
                             description: sug.description,
-                            instructions: sug.instructions || 'Prepare ingredients and cook according to disciplined routine.',
+                            instructions: sug.instructions || 'Prepare ingredients and cook according to recipe directions.',
                             tags: macroTags,
                             ingredients: sug.ingredients && sug.ingredients.length > 0 ? sug.ingredients : (sug.used_pantry_items || []).map(name => {
                               const found = pantry.find(p => p.name.toLowerCase() === name.toLowerCase());

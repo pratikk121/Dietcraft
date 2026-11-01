@@ -17,7 +17,7 @@ export default async function handler(req, res) {
 
   try {
     let prompt = '';
-    const systemInstruction = 'You are a professional Michelin-trained chef and registered dietitian specializing in healthy, structured, single-person nutrition and disciplined lifestyle planning. Always respond with clean, valid JSON only without markdown code blocks, backticks, or preamble.';
+    const systemInstruction = 'You are a helpful culinary chef and dietitian. Create practical, delicious recipes and meal plans scaled precisely to the requested number of servings. Give standard, clean, appetizing dish titles (do not add words like "Disciplined", "Single-Living", or buzzwords to recipe titles). Respond strictly with valid JSON only without markdown code blocks, backticks, or preamble.';
 
     if (action === 'suggest_from_pantry') {
       const pantryItems = payload.pantry || payload.pantryItems || [];
@@ -27,30 +27,28 @@ export default async function handler(req, res) {
 
       prompt = `${systemInstruction}
 
-CONTEXT & GOAL:
-The user is living an intentional, structured, disciplined single life.
-Create 3 high-quality, practical meals tailored for EXACTLY ${targetServings} SERVING(S).
-Portions and quantities MUST be realistically scaled for ${targetServings} person (e.g. 1 egg, 70g dry rice, 150g chicken, 1/2 onion).
-Avoid food waste by intelligently using items currently in the pantry.
+Suggest 3 realistic, delicious recipes tailored for EXACTLY ${targetServings} SERVING(S).
+Scale ingredient quantities appropriately for ${targetServings} serving(s).
+Intelligently prioritize ingredients currently in the pantry.
 
 Available ingredients in pantry/fridge:
 ${itemsList || 'Basic kitchen essentials (salt, pepper, oil, water)'}
 
 User preferences/dietary notes:
-${preferences || 'Healthy, high-protein, minimal cleanup, disciplined lifestyle'}
+${preferences || 'Healthy, balanced, easy to prepare'}
 
 For each recipe, generate:
-- title: string
-- description: string (highlight why it fits a structured routine)
+- title: string (Standard recipe name like "Tomato Dal", "Garlic Chicken", "Veggie Stir-Fry", NO cringe or preachy adjectives)
+- description: string (Brief appetizing summary of the dish)
 - category: "Breakfast" | "Lunch" | "Dinner" | "Snack" | "Dessert"
 - prep_time: number (minutes)
 - cook_time: number (minutes)
 - servings: ${targetServings}
-- calories: number (estimated total kcal for this single serving)
+- calories: number (estimated total kcal for this serving size)
 - protein_g: number (grams of protein)
 - carbs_g: number (grams of carbs)
 - fat_g: number (grams of fat)
-- single_person_tip: string (e.g., how to store leftover half-can/produce, or one-skillet quick cleanup technique)
+- single_person_tip: string (Practical cooking or ingredient storage tip, e.g. how to store unused produce or optimize cooking time)
 - ingredients: array of objects scaled for ${targetServings} serving(s):
     [{ "name": string, "quantity": number, "unit": string, "category": "Produce"|"Meat/Seafood"|"Dairy"|"Bakery"|"Pantry"|"Spices"|"Canned"|"Frozen"|"Other" }]
 - instructions: string (clear numbered steps)
@@ -60,22 +58,22 @@ For each recipe, generate:
 Respond strictly with a JSON array:
 [
   {
-    "title": "One-Pan Protein Scramble",
-    "description": "Quick 12-minute balanced breakfast scaled for 1 person.",
+    "title": "One-Pan Egg Scramble",
+    "description": "Quick and flavorful breakfast scramble made in one skillet.",
     "category": "Breakfast",
     "prep_time": 5,
     "cook_time": 7,
     "servings": ${targetServings},
-    "calories": 380,
-    "protein_g": 28,
-    "carbs_g": 12,
-    "fat_g": 24,
-    "single_person_tip": "Wrap remaining bell pepper half in paper towel in a sealed glass container to stay crisp for 5 days.",
+    "calories": 350,
+    "protein_g": 24,
+    "carbs_g": 8,
+    "fat_g": 20,
+    "single_person_tip": "Wrap any leftover bell pepper in a clean paper towel in a sealed container to keep it crisp for several days.",
     "ingredients": [
       { "name": "Eggs", "quantity": 2, "unit": "pcs", "category": "Dairy" },
       { "name": "Bell Pepper", "quantity": 0.5, "unit": "pcs", "category": "Produce" }
     ],
-    "instructions": "1. Chop bell pepper.\\n2. Whisk eggs.\\n3. Sauté in skillet until fluffy.",
+    "instructions": "1. Chop bell pepper.\\n2. Whisk eggs.\\n3. Sauté bell pepper in skillet for 2 minutes, pour in eggs and scramble gently until cooked.",
     "used_pantry_items": ["Eggs"],
     "missing_items": ["Bell Pepper"]
   }
@@ -85,7 +83,7 @@ Respond strictly with a JSON array:
       const targetServings = parseInt(payload.servings, 10) || 1;
       prompt = `${systemInstruction}
 
-Extract, clean, and adapt this raw recipe text for a single individual living a structured life.
+Extract, clean, and standardize this raw recipe text.
 Scale all ingredient quantities to EXACTLY ${targetServings} SERVING(S).
 
 Raw Recipe:
@@ -118,19 +116,19 @@ Format strictly as JSON:
 
       prompt = `${systemInstruction}
 
-CONTEXT:
-Single person living a structured, disciplined life.
-Goal: Efficient routine, high nutrition adherence (~${targetCalories} kcal/day target), zero food waste, smart batching (e.g. deliberate dinner leftovers packed for next day's lunch).
+Create a balanced meal plan for ${servings} serving(s) per meal.
+Target roughly ~${targetCalories} kcal/day across the day.
+Make smart use of pantry items and recipe library to minimize waste.
 
 User's recipe library:
-${recipeNames || 'Suggest balanced, clean single-person recipes'}
+${recipeNames || 'Suggest balanced, everyday home-cooked recipes'}
 
 Available pantry items:
 ${pantryNames || 'Standard kitchen ingredients'}
 
 Schedule:
 From ${startDate} to ${endDate} for meal slots: ${mealsToPlan.join(', ')}.
-Dietary notes/goals: "${dietaryNotes || 'High-energy, structured single-person nutrition'}".
+Dietary preferences: "${dietaryNotes || 'Healthy, balanced home cooking'}".
 
 Return a JSON array of meal assignments:
 [
@@ -141,7 +139,7 @@ Return a JSON array of meal assignments:
     "meal_name": string,
     "servings": ${servings},
     "reasoning": string,
-    "discipline_tip": string
+    "chef_tip": string
   }
 ]`;
     } else {
