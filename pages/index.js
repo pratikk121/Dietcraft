@@ -652,15 +652,17 @@ export default function Home() {
   };
 
   // AI Action: Ask what to cook from pantry
-  const handleAskAiChef = async (targetServings = aiChefServings) => {
+  const handleAskAiChef = async (targetServings) => {
+    const servings = (typeof targetServings === 'number' && targetServings > 0) ? targetServings : (aiChefServings || 1);
+    setAiChefServings(servings);
     setAiChefModal(true);
     setAiRecipeResults(null);
 
     const availablePantry = pantry.filter(p => (parseFloat(p.quantity) || 0) > 0);
     const result = await callAiEndpoint('suggest_from_pantry', { 
       pantry: availablePantry,
-      servings: targetServings,
-      preferences: targetServings === 1 
+      servings: servings,
+      preferences: servings === 1 
         ? 'Cook for 1 person living a disciplined structured life, high protein, minimal cleanup, zero waste'
         : 'Cook 2 servings (dinner plus pack tomorrow lunch), high protein, minimal cleanup'
     });
@@ -1274,7 +1276,7 @@ export default function Home() {
                   <p>Track current stock, identify ingredients planned for upcoming meals, and get AI chef recipe ideas.</p>
                 </div>
                 <div className="view-actions" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                  <button className="btn btn-secondary ai-glow-btn" onClick={handleAskAiChef}>
+                  <button className="btn btn-secondary ai-glow-btn" onClick={() => handleAskAiChef(1)}>
                     ✨ AI: What can I cook?
                   </button>
                   <button className="btn btn-primary" onClick={() => setPantryModal('add')}>
