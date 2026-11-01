@@ -2213,13 +2213,12 @@ function RecipeEditorModal({ recipe, onSave, onClose }) {
 
   return (
     <div className="modal-backdrop active" onClick={onClose}>
-      <div className="modal-card" style={{ maxWidth: '720px' }} onClick={e => e.stopPropagation()}>
+      <form className="modal-card" style={{ maxWidth: '720px' }} onClick={e => e.stopPropagation()} onSubmit={handleSubmit}>
         <div className="modal-header">
           <h3 className="modal-title">{recipe ? 'Edit Recipe' : 'Create New Recipe'}</h3>
-          <button className="btn btn-secondary btn-sm btn-icon" onClick={onClose}>✕</button>
+          <button type="button" className="btn btn-secondary btn-sm btn-icon" onClick={onClose}>✕</button>
         </div>
-        <form onSubmit={handleSubmit}>
-          <div className="modal-body">
+        <div className="modal-body">
             <div className="form-group">
               <label className="form-label">Recipe Title *</label>
               <input type="text" value={title} onChange={e => setTitle(e.target.value)} className="form-control" placeholder="e.g. Tuscan Garlic Chicken" required />
@@ -2296,8 +2295,7 @@ function RecipeEditorModal({ recipe, onSave, onClose }) {
             <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
             <button type="submit" className="btn btn-primary">Save Recipe</button>
           </div>
-        </form>
-      </div>
+      </form>
     </div>
   );
 }
