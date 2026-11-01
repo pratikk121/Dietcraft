@@ -518,6 +518,7 @@ export default function Home() {
     const relevantPlans = mealPlans.filter(p => p.date >= startDate && p.date <= endDate && p.recipe_id);
     if (relevantPlans.length === 0) {
       showToast('No planned meals with recipes found in this date range.');
+      setGenerateShoppingModal(false);
       return;
     }
 
