@@ -617,13 +617,14 @@ export default function Home() {
   const callAiEndpoint = async (action, payload) => {
     setAiLoading(true);
     try {
+      const keyToSend = geminiApiKey || (typeof window !== 'undefined' ? localStorage.getItem('dietcraft_gemini_key') : null) || undefined;
       const res = await fetch('/api/ai', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           action,
           payload,
-          userApiKey: geminiApiKey || undefined
+          userApiKey: keyToSend
         })
       });
 
