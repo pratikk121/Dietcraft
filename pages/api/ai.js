@@ -112,22 +112,50 @@ Return a JSON array of meal assignments:
       return res.status(400).json({ error: 'Unknown action: ' + action });
     }
 
-    // Call Google Gemini API
-    // Tests official production flash models across API versions
-    const candidateEndpoints = [
-      { ver: 'v1beta', model: 'gemini-2.0-flash' },
-      { ver: 'v1beta', model: 'gemini-2.5-flash' },
-      { ver: 'v1beta', model: 'gemini-1.5-flash-latest' },
-      { ver: 'v1', model: 'gemini-1.5-flash' },
-      { ver: 'v1', model: 'gemini-2.0-flash' },
-      { ver: 'v1beta', model: 'gemini-pro' }
-    ];
-    let lastError = null;
+    // Dynamically discover which models are enabled for this API key
     let candidateText = null;
+    let lastError = null;
 
-    for (const ep of candidateEndpoints) {
+    // 1. Try querying the user's available model list
+    let availableModels = [];
+    try {
+      const listRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${activeKey}`);
+      if (listRes.ok) {
+        const listData = await listRes.json();
+        if (listData.models && Array.isArray(listData.models)) {
+          availableModels = listData.models
+            .filter(m => m.supportedGenerationMethods && m.supportedGenerationMethods.includes('generateContent'))
+            .map(m => m.name.replace(/^models\//, ''));
+        }
+      } else {
+        const errJson = await listRes.json().catch(() => ({}));
+        lastError = errJson.error?.message || `HTTP ${listRes.status}`;
+      }
+    } catch (e) {
+      lastError = e.message;
+    }
+
+    // Default priority list if listModels is empty or restricted
+    const priorityFallbacks = [
+      'gemini-2.0-flash',
+      'gemini-2.5-flash',
+      'gemini-1.5-flash',
+      'gemini-1.5-flash-8b',
+      'gemini-1.5-pro'
+    ];
+
+    // Combine discovered models with priority fallbacks
+    const modelsToTry = [
+      ...availableModels.filter(m => m.includes('flash') || m.includes('2.0') || m.includes('1.5')),
+      ...availableModels,
+      ...priorityFallbacks
+    ];
+    // Deduplicate
+    const uniqueModels = [...new Set(modelsToTry)];
+
+    for (const model of uniqueModels) {
       try {
-        const geminiUrl = `https://generativelanguage.googleapis.com/${ep.ver}/models/${ep.model}:generateContent?key=${activeKey}`;
+        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${activeKey}`;
         const response = await fetch(geminiUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -154,7 +182,9 @@ Return a JSON array of meal assignments:
     }
 
     if (!candidateText) {
-      return res.status(500).json({ error: `Gemini Error: ${lastError || 'No response returned from Gemini'}` });
+      return res.status(500).json({ 
+        error: `Gemini Error: ${lastError || 'Could not generate content with available models'}. Discovered models: [${availableModels.slice(0, 5).join(', ')}]` 
+      });
     }
 
     // Clean JSON response (strip markdown fences if present)
