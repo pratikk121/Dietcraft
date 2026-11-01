@@ -87,8 +87,35 @@ export default function Home() {
         const { data: priceData } = await supabase.from('price_history').select('*').order('date', { ascending: false });
         if (priceData) setPriceHistory(priceData);
 
-        const { data: pantryData } = await supabase.from('pantry').select('*').order('name', { ascending: true });
-        if (pantryData) setPantry(pantryData);
+        const { data: pantryData, error: pantryErr } = await supabase.from('pantry').select('*').order('name', { ascending: true });
+        if (pantryData && pantryData.length > 0) {
+          setPantry(pantryData);
+          localStorage.setItem('dietcraft_pantry', JSON.stringify(pantryData));
+        } else {
+          // Fallback to local storage so items are not wiped if offline or table was empty
+          const localPantry = localStorage.getItem('dietcraft_pantry');
+          if (localPantry) {
+            const parsed = JSON.parse(localPantry);
+            setPantry(parsed);
+            // If local storage has items but Supabase was empty, auto-sync them up to Supabase
+            if (parsed.length > 0 && !pantryErr) {
+              const toSync = parsed.map(p => ({
+                name: p.name.trim(),
+                quantity: parseFloat(p.quantity) || 0,
+                unit: p.unit.trim(),
+                category: p.category || 'Pantry',
+                expiry_date: p.expiry_date || null,
+                notes: p.notes || ''
+              }));
+              supabase.from('pantry').upsert(toSync, { onConflict: 'name, unit' }).select().then(({ data: synced }) => {
+                if (synced && synced.length > 0) {
+                  setPantry(synced);
+                  localStorage.setItem('dietcraft_pantry', JSON.stringify(synced));
+                }
+              }).catch(e => console.error('Pantry auto-sync error:', e));
+            }
+          }
+        }
 
         const { data: setData } = await supabase.from('settings').select('*');
         if (setData) {
@@ -412,38 +439,74 @@ export default function Home() {
         (p.name.toLowerCase().trim() === itemData.name.toLowerCase().trim() && p.unit.toLowerCase().trim() === itemData.unit.toLowerCase().trim())
       );
 
+      const name = itemData.name.trim();
+      const unit = itemData.unit.trim();
+      const quantity = Math.max(0, parseFloat(itemData.quantity) || 0);
+      const category = itemData.category || 'Pantry';
+      const expiry_date = itemData.expiry_date || null;
+      const notes = itemData.notes || '';
+
+      // Payload strictly conforming to Supabase pantry table schema
+      const dbPayload = {
+        name,
+        quantity,
+        unit,
+        category,
+        expiry_date,
+        notes
+      };
+
+      let savedItem = { ...dbPayload, id: itemData.id || Date.now() };
+
+      if (isSupabaseConfigured && supabase) {
+        if (itemData.id && typeof itemData.id === 'number' && itemData.id < 1000000000000) {
+          // Existing database row with Supabase bigserial id
+          const { data: updatedRows, error: upErr } = await supabase
+            .from('pantry')
+            .update(dbPayload)
+            .eq('id', itemData.id)
+            .select();
+          if (upErr) throw upErr;
+          if (updatedRows && updatedRows[0]) savedItem = updatedRows[0];
+        } else {
+          // New row: upsert by unique constraint (name, unit)
+          const { data: upsertedRows, error: upErr } = await supabase
+            .from('pantry')
+            .upsert([dbPayload], { onConflict: 'name, unit' })
+            .select();
+          if (upErr) throw upErr;
+          if (upsertedRows && upsertedRows[0]) savedItem = upsertedRows[0];
+        }
+      }
+
       let updatedPantry;
-      const cleanItem = {
+      if (existingIdx >= 0) {
+        updatedPantry = [...pantry];
+        updatedPantry[existingIdx] = savedItem;
+      } else {
+        updatedPantry = [savedItem, ...pantry];
+      }
+
+      setPantry(updatedPantry);
+      localStorage.setItem('dietcraft_pantry', JSON.stringify(updatedPantry));
+      setPantryModal(null);
+      showToast(existingIdx >= 0 ? 'Pantry item updated in cloud DB!' : 'Item added to pantry & cloud DB!');
+    } catch (err) {
+      console.error('Failed to save pantry item to Supabase', err);
+      const fallbackItem = {
         id: itemData.id || Date.now(),
         name: itemData.name.trim(),
         quantity: Math.max(0, parseFloat(itemData.quantity) || 0),
         unit: itemData.unit.trim(),
         category: itemData.category || 'Pantry',
         expiry_date: itemData.expiry_date || null,
-        notes: itemData.notes || '',
-        updated_at: new Date().toISOString()
+        notes: itemData.notes || ''
       };
-
-      if (existingIdx >= 0) {
-        updatedPantry = [...pantry];
-        updatedPantry[existingIdx] = { ...updatedPantry[existingIdx], ...cleanItem };
-      } else {
-        updatedPantry = [cleanItem, ...pantry];
-      }
-
+      const updatedPantry = [fallbackItem, ...pantry.filter(p => p.id !== fallbackItem.id)];
       setPantry(updatedPantry);
       localStorage.setItem('dietcraft_pantry', JSON.stringify(updatedPantry));
-
-      if (isSupabaseConfigured && supabase) {
-        await supabase.from('pantry').upsert([cleanItem], { onConflict: 'name, unit' });
-      }
-
       setPantryModal(null);
-      showToast(existingIdx >= 0 ? 'Pantry item updated!' : 'Item added to pantry!');
-    } catch (err) {
-      console.error('Failed to save pantry item', err);
-      showToast('Saved to local storage');
-      setPantryModal(null);
+      showToast('Saved locally (' + (err.message || 'Cloud sync error') + ')');
     }
   };
 
@@ -456,19 +519,36 @@ export default function Home() {
     localStorage.setItem('dietcraft_pantry', JSON.stringify(updated));
 
     if (isSupabaseConfigured && supabase) {
-      supabase.from('pantry').update({ quantity: newQty }).eq('id', id);
+      try {
+        if (typeof id === 'number' && id < 1000000000000) {
+          await supabase.from('pantry').update({ quantity: newQty }).eq('id', id);
+        } else {
+          await supabase.from('pantry').update({ quantity: newQty }).match({ name: item.name, unit: item.unit });
+        }
+      } catch (err) {
+        console.error('Failed to update pantry quantity in Supabase', err);
+      }
     }
   };
 
   const handleDeletePantryItem = async (id) => {
+    const itemToDelete = pantry.find(p => p.id === id);
     const updated = pantry.filter(p => p.id !== id);
     setPantry(updated);
     localStorage.setItem('dietcraft_pantry', JSON.stringify(updated));
 
     if (isSupabaseConfigured && supabase) {
-      supabase.from('pantry').delete().eq('id', id);
+      try {
+        if (typeof id === 'number' && id < 1000000000000) {
+          await supabase.from('pantry').delete().eq('id', id);
+        } else if (itemToDelete) {
+          await supabase.from('pantry').delete().match({ name: itemToDelete.name, unit: itemToDelete.unit });
+        }
+      } catch (err) {
+        console.error('Failed to delete pantry item from Supabase', err);
+      }
     }
-    showToast('Item removed from pantry');
+    showToast('Item removed from pantry & cloud DB');
   };
 
   // Restock Pantry from Checked Shopping List Items
@@ -489,26 +569,40 @@ export default function Home() {
         p.unit.toLowerCase().trim() === ci.unit.toLowerCase().trim()
       );
 
+      const addQty = parseFloat(ci.quantity) || 1;
       if (idx >= 0) {
-        const newQty = (parseFloat(updatedPantry[idx].quantity) || 0) + (parseFloat(ci.quantity) || 0);
+        const newQty = Math.round(((parseFloat(updatedPantry[idx].quantity) || 0) + addQty) * 100) / 100;
         updatedPantry[idx] = {
           ...updatedPantry[idx],
-          quantity: Math.round(newQty * 100) / 100,
-          updated_at: new Date().toISOString()
+          quantity: newQty
         };
-        itemsToUpsert.push(updatedPantry[idx]);
+        itemsToUpsert.push({
+          name: updatedPantry[idx].name,
+          quantity: newQty,
+          unit: updatedPantry[idx].unit,
+          category: updatedPantry[idx].category || 'Pantry',
+          expiry_date: updatedPantry[idx].expiry_date || null,
+          notes: updatedPantry[idx].notes || 'Restocked from shopping'
+        });
       } else {
         const newItem = {
           id: Date.now() + Math.random(),
-          name: ci.name,
-          quantity: parseFloat(ci.quantity) || 1,
-          unit: ci.unit || 'pcs',
+          name: ci.name.trim(),
+          quantity: addQty,
+          unit: (ci.unit || 'pcs').trim(),
           category: ci.category || 'Pantry',
           expiry_date: null,
           notes: 'Restocked from shopping list'
         };
         updatedPantry.unshift(newItem);
-        itemsToUpsert.push(newItem);
+        itemsToUpsert.push({
+          name: newItem.name,
+          quantity: newItem.quantity,
+          unit: newItem.unit,
+          category: newItem.category,
+          expiry_date: null,
+          notes: newItem.notes
+        });
       }
     });
 
@@ -516,10 +610,21 @@ export default function Home() {
     localStorage.setItem('dietcraft_pantry', JSON.stringify(updatedPantry));
 
     if (isSupabaseConfigured && supabase && itemsToUpsert.length > 0) {
-      supabase.from('pantry').upsert(itemsToUpsert, { onConflict: 'name, unit' });
+      try {
+        const { data: syncedRows } = await supabase.from('pantry').upsert(itemsToUpsert, { onConflict: 'name, unit' }).select();
+        if (syncedRows && syncedRows.length > 0) {
+          const { data: allPantry } = await supabase.from('pantry').select('*').order('name', { ascending: true });
+          if (allPantry) {
+            setPantry(allPantry);
+            localStorage.setItem('dietcraft_pantry', JSON.stringify(allPantry));
+          }
+        }
+      } catch (err) {
+        console.error('Failed to sync restocked items to Supabase', err);
+      }
     }
 
-    showToast(`Transferred ${checkedItems.length} purchased items to your pantry! 📦`);
+    showToast(`Transferred ${checkedItems.length} purchased items to pantry & cloud DB! 📦`);
   };
 
   // Generate Monthly Shopping List (with Pantry deduction support)
