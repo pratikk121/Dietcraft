@@ -653,10 +653,6 @@ export default function Home() {
 
   // AI Action: Ask what to cook from pantry
   const handleAskAiChef = async (targetServings = aiChefServings) => {
-    if (pantry.length === 0) {
-      showToast('Your pantry is empty! Add ingredients first.');
-      return;
-    }
     setAiChefModal(true);
     setAiRecipeResults(null);
 
