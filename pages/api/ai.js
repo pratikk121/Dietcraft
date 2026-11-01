@@ -113,7 +113,8 @@ Return a JSON array of meal assignments:
     }
 
     // Determine target model directly
-    let targetModel = 'gemini-2.5-flash';
+    // Google API now requires gemini-3.8-flash for new users
+    let targetModel = 'gemini-3.8-flash';
     try {
       const listRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${activeKey}`, {
         signal: AbortSignal.timeout(3500)
@@ -124,17 +125,15 @@ Return a JSON array of meal assignments:
           .filter(m => m.supportedGenerationMethods && m.supportedGenerationMethods.includes('generateContent'))
           .map(m => m.name.replace(/^models\//, ''));
 
-        // Pick the fastest available flash model
-        const preferred = available.find(m => m === 'gemini-2.5-flash') ||
-                          available.find(m => m === 'gemini-2.0-flash') ||
-                          available.find(m => m === 'gemini-1.5-flash') ||
+        // Pick latest available flash model
+        const preferred = available.find(m => m === 'gemini-3.8-flash') ||
+                          available.find(m => m.includes('3.8')) ||
                           available.find(m => m.includes('flash')) ||
                           available[0];
         if (preferred) targetModel = preferred;
       }
     } catch (e) {
-      // fallback to gemini-2.5-flash if listModels times out
-      targetModel = 'gemini-2.5-flash';
+      targetModel = 'gemini-3.8-flash';
     }
 
     // Call chosen model directly with 10s timeout
