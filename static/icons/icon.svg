@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#059669" />
+      <stop offset="100%" stop-color="#064e3b" />
+    </linearGradient>
+    <linearGradient id="accentGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#34d399" />
+      <stop offset="100%" stop-color="#10b981" />
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-opacity="0.3"/>
+    </filter>
+  </defs>
+  
+  <!-- Rounded Base -->
+  <rect width="512" height="512" rx="110" fill="url(#bgGrad)" />
+
+  <!-- Inner glowing circle -->
+  <circle cx="256" cy="256" r="190" fill="#0f172a" fill-opacity="0.35" />
+
+  <!-- Shopping Basket / Cloche Hybrid Motif -->
+  <g filter="url(#shadow)" transform="translate(106, 116)">
+    <!-- Shopping Bag Body -->
+    <path d="M40 90 L260 90 L240 270 C238 282 228 290 216 290 L84 290 C72 290 62 282 60 270 Z" 
+          fill="url(#accentGrad)" />
+
+    <!-- Bag Handles -->
+    <path d="M100 90 C100 40 200 40 200 90" 
+          fill="none" stroke="#f0fdf4" stroke-width="20" stroke-linecap="round" />
+
+    <!-- Fresh Diet Leaf Emblem -->
+    <path d="M150 140 C110 140 100 200 150 240 C200 200 190 140 150 140 Z" fill="#ffffff" />
+    <path d="M150 140 L150 240" stroke="#059669" stroke-width="6" stroke-linecap="round" />
+  </g>
+</svg>

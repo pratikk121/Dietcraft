@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=DietCraft
+Comment=Personal Recipe Database, Meal Planner & Shopping Tracker
+Exec=/home/pratik/Projects/Apps/diet/run.sh
+Icon=/home/pratik/Projects/Apps/diet/static/icons/icon.svg
+Terminal=true
+Categories=Utility;Office;Food;
+StartupNotify=true
