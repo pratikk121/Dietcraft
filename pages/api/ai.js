@@ -112,14 +112,22 @@ Return a JSON array of meal assignments:
       return res.status(400).json({ error: 'Unknown action: ' + action });
     }
 
-    // Call Google Gemini API (tries gemini-2.5-flash, fallback to gemini-1.5-flash)
-    const models = ['gemini-2.5-flash', 'gemini-1.5-flash'];
+    // Call Google Gemini API
+    // Tests official production flash models across API versions
+    const candidateEndpoints = [
+      { ver: 'v1beta', model: 'gemini-2.0-flash' },
+      { ver: 'v1beta', model: 'gemini-2.5-flash' },
+      { ver: 'v1beta', model: 'gemini-1.5-flash-latest' },
+      { ver: 'v1', model: 'gemini-1.5-flash' },
+      { ver: 'v1', model: 'gemini-2.0-flash' },
+      { ver: 'v1beta', model: 'gemini-pro' }
+    ];
     let lastError = null;
     let candidateText = null;
 
-    for (const model of models) {
+    for (const ep of candidateEndpoints) {
       try {
-        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${activeKey}`;
+        const geminiUrl = `https://generativelanguage.googleapis.com/${ep.ver}/models/${ep.model}:generateContent?key=${activeKey}`;
         const response = await fetch(geminiUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
