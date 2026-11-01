@@ -117,6 +117,50 @@ export default function Home() {
           }
         }
 
+        // Auto-reflect all recipe ingredients into pantry (0 quantity if not yet stocked)
+        const activePantry = (pantryData && pantryData.length > 0) ? pantryData : [];
+        const missingRecipeIngredients = [];
+        (recData || []).forEach(r => {
+          (r.ingredients || []).forEach(ing => {
+            const ingName = (ing.name || '').trim();
+            const ingUnit = (ing.unit || 'pcs').trim();
+            if (!ingName) return;
+            const alreadyExists = activePantry.some(
+              p => p.name.toLowerCase().trim() === ingName.toLowerCase() &&
+                   p.unit.toLowerCase().trim() === ingUnit.toLowerCase()
+            ) || missingRecipeIngredients.some(
+              m => m.name.toLowerCase().trim() === ingName.toLowerCase() &&
+                   m.unit.toLowerCase().trim() === ingUnit.toLowerCase()
+            );
+            if (!alreadyExists) {
+              missingRecipeIngredients.push({
+                name: ingName,
+                quantity: 0,
+                unit: ingUnit,
+                category: ing.category || 'Pantry',
+                expiry_date: null,
+                notes: `From recipe: ${r.title}`
+              });
+            }
+          });
+        });
+
+        if (missingRecipeIngredients.length > 0) {
+          const combinedPantry = [...activePantry, ...missingRecipeIngredients.map(m => ({ ...m, id: Date.now() + Math.random() }))];
+          setPantry(combinedPantry);
+          localStorage.setItem('dietcraft_pantry', JSON.stringify(combinedPantry));
+          supabase.from('pantry').upsert(missingRecipeIngredients, { onConflict: 'name, unit' }).select().then(({ data: added }) => {
+            if (added && added.length > 0) {
+              supabase.from('pantry').select('*').order('name', { ascending: true }).then(({ data: refreshed }) => {
+                if (refreshed) {
+                  setPantry(refreshed);
+                  localStorage.setItem('dietcraft_pantry', JSON.stringify(refreshed));
+                }
+              });
+            }
+          }).catch(e => console.error('Pantry recipe sync error:', e));
+        }
+
         const { data: setData } = await supabase.from('settings').select('*');
         if (setData) {
           const curr = setData.find(s => s.key === 'currency');
@@ -127,7 +171,8 @@ export default function Home() {
       } else {
         // LocalStorage Fallback
         const localRec = localStorage.getItem('dietcraft_recipes');
-        setRecipes(localRec ? JSON.parse(localRec) : []);
+        const localRecParsed = localRec ? JSON.parse(localRec) : [];
+        setRecipes(localRecParsed);
 
         const localPlans = localStorage.getItem('dietcraft_meal_plans');
         if (localPlans) setMealPlans(JSON.parse(localPlans));
@@ -139,7 +184,40 @@ export default function Home() {
         if (localPrices) setPriceHistory(JSON.parse(localPrices));
 
         const localPantry = localStorage.getItem('dietcraft_pantry');
-        if (localPantry) setPantry(JSON.parse(localPantry));
+        let localPantryParsed = localPantry ? JSON.parse(localPantry) : [];
+
+        // Auto-mirror local recipe ingredients into pantry
+        const missingLocalIngs = [];
+        localRecParsed.forEach(r => {
+          (r.ingredients || []).forEach(ing => {
+            const ingName = (ing.name || '').trim();
+            const ingUnit = (ing.unit || 'pcs').trim();
+            if (!ingName) return;
+            const exists = localPantryParsed.some(
+              p => p.name.toLowerCase().trim() === ingName.toLowerCase() &&
+                   p.unit.toLowerCase().trim() === ingUnit.toLowerCase()
+            ) || missingLocalIngs.some(
+              m => m.name.toLowerCase().trim() === ingName.toLowerCase() &&
+                   m.unit.toLowerCase().trim() === ingUnit.toLowerCase()
+            );
+            if (!exists) {
+              missingLocalIngs.push({
+                id: Date.now() + Math.random(),
+                name: ingName,
+                quantity: 0,
+                unit: ingUnit,
+                category: ing.category || 'Pantry',
+                expiry_date: null,
+                notes: `From recipe: ${r.title}`
+              });
+            }
+          });
+        });
+        if (missingLocalIngs.length > 0) {
+          localPantryParsed = [...localPantryParsed, ...missingLocalIngs];
+          localStorage.setItem('dietcraft_pantry', JSON.stringify(localPantryParsed));
+        }
+        setPantry(localPantryParsed);
 
         const localCurr = localStorage.getItem('dietcraft_currency');
         if (localCurr) setCurrency(localCurr);
@@ -168,7 +246,8 @@ export default function Home() {
   // Recipe Filtered List
   const filteredRecipes = useMemo(() => {
     return recipes.filter(r => {
-      const matchCat = recipeCategory === 'All' || r.category === recipeCategory;
+      const catList = (r.category || 'Dinner').toLowerCase().split(',').map(c => c.trim());
+      const matchCat = recipeCategory === 'All' || catList.includes(recipeCategory.toLowerCase()) || r.category === recipeCategory;
       const matchSearch = !recipeSearch || 
         r.title.toLowerCase().includes(recipeSearch.toLowerCase()) ||
         (r.description && r.description.toLowerCase().includes(recipeSearch.toLowerCase())) ||
@@ -265,6 +344,57 @@ export default function Home() {
     return shoppingLists.find(l => l.id === activeShoppingListId) || null;
   }, [shoppingLists, activeShoppingListId]);
 
+  // Auto-mirror recipe ingredients into Pantry with 0 quantity if not yet stocked
+  const syncIngredientsToPantry = async (ingredientsList, sourceRecipeTitle) => {
+    if (!ingredientsList || ingredientsList.length === 0) return;
+
+    let updatedPantry = [...pantry];
+    const itemsToAdd = [];
+
+    ingredientsList.forEach(ing => {
+      const name = (ing.name || '').trim();
+      const unit = (ing.unit || 'pcs').trim();
+      const category = ing.category || 'Pantry';
+      if (!name) return;
+
+      const exists = updatedPantry.some(
+        p => p.name.toLowerCase().trim() === name.toLowerCase() &&
+             p.unit.toLowerCase().trim() === unit.toLowerCase()
+      );
+
+      if (!exists) {
+        const itemObj = {
+          name,
+          quantity: 0,
+          unit,
+          category,
+          expiry_date: null,
+          notes: sourceRecipeTitle ? `For: ${sourceRecipeTitle}` : 'From recipe'
+        };
+        updatedPantry.push({ ...itemObj, id: Date.now() + Math.random() });
+        itemsToAdd.push(itemObj);
+      }
+    });
+
+    if (itemsToAdd.length > 0) {
+      setPantry(updatedPantry);
+      localStorage.setItem('dietcraft_pantry', JSON.stringify(updatedPantry));
+
+      if (isSupabaseConfigured && supabase) {
+        try {
+          await supabase.from('pantry').upsert(itemsToAdd, { onConflict: 'name, unit' });
+          const { data: refreshed } = await supabase.from('pantry').select('*').order('name', { ascending: true });
+          if (refreshed && refreshed.length > 0) {
+            setPantry(refreshed);
+            localStorage.setItem('dietcraft_pantry', JSON.stringify(refreshed));
+          }
+        } catch (e) {
+          console.error('Failed to sync recipe ingredients to pantry in DB:', e);
+        }
+      }
+    }
+  };
+
   // Save Recipe
   const handleSaveRecipe = async (recipeData) => {
     if (isSupabaseConfigured && supabase) {
@@ -328,8 +458,14 @@ export default function Home() {
       setRecipes(updated);
       localStorage.setItem('dietcraft_recipes', JSON.stringify(updated));
     }
+
+    // Auto-reflect recipe ingredients in pantry with 0 quantity if not already stocked
+    if (recipeData.ingredients && recipeData.ingredients.length > 0) {
+      await syncIngredientsToPantry(recipeData.ingredients, recipeData.title);
+    }
+
     setIsEditingRecipe(false);
-    showToast('Recipe saved successfully!');
+    showToast('Recipe saved & ingredients reflected in pantry!');
   };
 
   // Open Recipe Detail with Serving Scaler
@@ -407,7 +543,10 @@ export default function Home() {
         newPlans = newPlans.filter(p => !(p.date === dateStr && p.meal_type === mealType));
 
         // Pick matching recipe
-        const matching = recipes.filter(r => r.category.toLowerCase() === mealType.toLowerCase());
+        const matching = recipes.filter(r => {
+          const cats = (r.category || '').toLowerCase().split(',').map(c => c.trim());
+          return cats.includes(mealType.toLowerCase());
+        });
         const chosen = matching.length > 0
           ? matching[Math.floor(Math.random() * matching.length)]
           : recipes[Math.floor(Math.random() * recipes.length)];
@@ -1088,7 +1227,13 @@ export default function Home() {
                   filteredRecipes.map(r => (
                     <div key={r.id} className="recipe-card" onClick={() => handleOpenRecipeDetail(r)}>
                       <div className="recipe-card-header">
-                        <span className={`recipe-category-badge badge-${r.category.toLowerCase()}`}>{r.category}</span>
+                        <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                          {(r.category || 'Dinner').split(',').map(cat => (
+                            <span key={cat.trim()} className={`recipe-category-badge badge-${cat.trim().toLowerCase()}`}>
+                              {cat.trim()}
+                            </span>
+                          ))}
+                        </div>
                         <span style={{ 
                           fontSize: '0.78rem', 
                           fontWeight: r.servings === 1 ? 600 : 400,
@@ -1693,7 +1838,11 @@ export default function Home() {
             </div>
             <div className="modal-body">
               <div style={{ display: 'flex', gap: '8px', marginBottom: '14px', flexWrap: 'wrap', alignItems: 'center' }}>
-                <span className={`recipe-category-badge badge-${selectedRecipeDetail.category.toLowerCase()}`}>{selectedRecipeDetail.category}</span>
+                {(selectedRecipeDetail.category || 'Dinner').split(',').map(cat => (
+                  <span key={cat.trim()} className={`recipe-category-badge badge-${cat.trim().toLowerCase()}`}>
+                    {cat.trim()}
+                  </span>
+                ))}
                 <span style={{ color: 'var(--text-secondary)', fontSize: '0.88rem' }}>⏱️ Prep: {selectedRecipeDetail.prep_time}m | Cook: {selectedRecipeDetail.cook_time}m</span>
               </div>
               {selectedRecipeDetail.description && <p style={{ color: 'var(--text-secondary)', fontStyle: 'italic', marginBottom: '14px' }}>{selectedRecipeDetail.description}</p>}
@@ -2486,7 +2635,15 @@ export default function Home() {
 // Subcomponent: Recipe Editor Modal
 function RecipeEditorModal({ recipe, onSave, onClose }) {
   const [title, setTitle] = useState(recipe ? recipe.title : '');
-  const [category, setCategory] = useState(recipe ? recipe.category : 'Dinner');
+  
+  // Support multiple meal categories e.g. ["Lunch", "Dinner"]
+  const initialCategories = useMemo(() => {
+    if (!recipe || !recipe.category) return ['Dinner'];
+    const parts = recipe.category.split(',').map(c => c.trim()).filter(Boolean);
+    return parts.length > 0 ? parts : ['Dinner'];
+  }, [recipe]);
+
+  const [selectedCategories, setSelectedCategories] = useState(initialCategories);
   const [servings, setServings] = useState(recipe ? (recipe.servings || 1) : 1);
   const [prepTime, setPrepTime] = useState(recipe ? recipe.prep_time : 15);
   const [cookTime, setCookTime] = useState(recipe ? recipe.cook_time : 20);
@@ -2515,10 +2672,11 @@ function RecipeEditorModal({ recipe, onSave, onClose }) {
 
   const handleSubmit = (e) => {
     e.preventDefault();
+    const finalCategory = selectedCategories.length > 0 ? selectedCategories.join(', ') : 'Dinner';
     onSave({
       id: recipe ? recipe.id : null,
       title,
-      category,
+      category: finalCategory,
       servings: parseInt(servings, 10) || 1,
       prep_time: parseInt(prepTime, 10) || 0,
       cook_time: parseInt(cookTime, 10) || 0,
@@ -2542,21 +2700,48 @@ function RecipeEditorModal({ recipe, onSave, onClose }) {
               <input type="text" value={title} onChange={e => setTitle(e.target.value)} className="form-control" placeholder="e.g. Tuscan Garlic Chicken" required />
             </div>
 
-            <div className="form-row">
-              <div className="form-group">
-                <label className="form-label">Category</label>
-                <select value={category} onChange={e => setCategory(e.target.value)} className="form-control">
-                  <option value="Breakfast">Breakfast</option>
-                  <option value="Lunch">Lunch</option>
-                  <option value="Dinner">Dinner</option>
-                  <option value="Snack">Snack</option>
-                  <option value="Dessert">Dessert</option>
-                </select>
+            <div className="form-group">
+              <label className="form-label" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span>Meal Categories *</span>
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Select all that apply (e.g. Lunch &amp; Dinner)</span>
+              </label>
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '4px' }}>
+                {['Breakfast', 'Lunch', 'Dinner', 'Snack', 'Dessert'].map(cat => {
+                  const isSelected = selectedCategories.includes(cat);
+                  return (
+                    <button
+                      key={cat}
+                      type="button"
+                      className={`btn btn-sm ${isSelected ? 'btn-primary' : 'btn-secondary'}`}
+                      style={{ 
+                        padding: '5px 14px', 
+                        borderRadius: '20px', 
+                        fontSize: '0.82rem',
+                        border: isSelected ? '1px solid #34d399' : '1px solid var(--border-color)',
+                        background: isSelected ? 'rgba(52, 211, 153, 0.18)' : 'var(--bg-surface)',
+                        color: isSelected ? '#34d399' : 'var(--text-secondary)',
+                        fontWeight: isSelected ? 600 : 400
+                      }}
+                      onClick={() => {
+                        if (isSelected) {
+                          if (selectedCategories.length > 1) {
+                            setSelectedCategories(selectedCategories.filter(c => c !== cat));
+                          }
+                        } else {
+                          setSelectedCategories([...selectedCategories, cat]);
+                        }
+                      }}
+                    >
+                      {isSelected ? '✓ ' : '+ '}{cat}
+                    </button>
+                  );
+                })}
               </div>
-              <div className="form-group">
-                <label className="form-label">Servings</label>
-                <input type="number" value={servings} onChange={e => setServings(e.target.value)} min="1" className="form-control" required />
-              </div>
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Servings</label>
+              <input type="number" value={servings} onChange={e => setServings(e.target.value)} min="1" className="form-control" required />
             </div>
 
             <div className="form-row">
