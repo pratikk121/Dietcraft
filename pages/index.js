@@ -89,8 +89,30 @@ export default function Home() {
 
         const { data: pantryData, error: pantryErr } = await supabase.from('pantry').select('*').order('name', { ascending: true });
         if (pantryData && pantryData.length > 0) {
-          setPantry(pantryData);
-          localStorage.setItem('dietcraft_pantry', JSON.stringify(pantryData));
+          // Clean any legacy 'From recipe' or 'For:' notes
+          const cleanedPantry = pantryData.map(p => {
+            if (p.notes && (p.notes.startsWith('From recipe') || p.notes.startsWith('For:'))) {
+              return { ...p, notes: '' };
+            }
+            return p;
+          });
+          setPantry(cleanedPantry);
+          localStorage.setItem('dietcraft_pantry', JSON.stringify(cleanedPantry));
+
+          // Also clean legacy notes in Supabase quietly
+          const itemsToUpdate = pantryData.filter(p => p.notes && (p.notes.startsWith('From recipe') || p.notes.startsWith('For:')));
+          if (itemsToUpdate.length > 0) {
+            const updates = itemsToUpdate.map(p => ({
+              id: p.id,
+              name: p.name,
+              quantity: p.quantity,
+              unit: p.unit,
+              category: p.category,
+              expiry_date: p.expiry_date,
+              notes: ''
+            }));
+            supabase.from('pantry').upsert(updates, { onConflict: 'name, unit' }).then(() => {}).catch(() => {});
+          }
         } else {
           // Fallback to local storage so items are not wiped if offline or table was empty
           const localPantry = localStorage.getItem('dietcraft_pantry');
@@ -139,7 +161,7 @@ export default function Home() {
                 unit: ingUnit,
                 category: ing.category || 'Pantry',
                 expiry_date: null,
-                notes: `From recipe: ${r.title}`
+                notes: ''
               });
             }
           });
@@ -208,7 +230,7 @@ export default function Home() {
                 unit: ingUnit,
                 category: ing.category || 'Pantry',
                 expiry_date: null,
-                notes: `From recipe: ${r.title}`
+                notes: ''
               });
             }
           });
@@ -369,7 +391,7 @@ export default function Home() {
           unit,
           category,
           expiry_date: null,
-          notes: sourceRecipeTitle ? `For: ${sourceRecipeTitle}` : 'From recipe'
+          notes: ''
         };
         updatedPantry.push({ ...itemObj, id: Date.now() + Math.random() });
         itemsToAdd.push(itemObj);
@@ -1628,7 +1650,9 @@ export default function Home() {
                         </div>
 
                         <div className="pantry-card-title">{item.name}</div>
-                        {item.notes && <div className="pantry-card-notes">{item.notes}</div>}
+                        {item.notes && !item.notes.startsWith('From recipe') && !item.notes.startsWith('For:') && (
+                          <div className="pantry-card-notes">{item.notes}</div>
+                        )}
 
                         {/* Planned Usage Badge */}
                         {usage ? (
