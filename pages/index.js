@@ -29,6 +29,22 @@ export default function Home() {
   const [customItemModal, setCustomItemModal] = useState(false);
   const [mobileConnectModal, setMobileConnectModal] = useState(false);
 
+  // Pantry State
+  const [pantry, setPantry] = useState([]);
+  const [pantryCategory, setPantryCategory] = useState('All');
+  const [pantrySearch, setPantrySearch] = useState('');
+  const [pantryModal, setPantryModal] = useState(null); // null, 'add', or { ...itemToEdit }
+
+  // AI Assistant State
+  const [geminiApiKey, setGeminiApiKey] = useState('');
+  const [aiChefModal, setAiChefModal] = useState(false);
+  const [aiRecipeResults, setAiRecipeResults] = useState(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiImportModal, setAiImportModal] = useState(false);
+  const [aiImportText, setAiImportText] = useState('');
+  const [aiSmartPlanModal, setAiSmartPlanModal] = useState(false);
+  const [aiDietaryNotes, setAiDietaryNotes] = useState('');
+
   // PWA Install Prompt
   const [deferredPrompt, setDeferredPrompt] = useState(null);
   const [toast, setToast] = useState('');
@@ -68,10 +84,15 @@ export default function Home() {
         const { data: priceData } = await supabase.from('price_history').select('*').order('date', { ascending: false });
         if (priceData) setPriceHistory(priceData);
 
+        const { data: pantryData } = await supabase.from('pantry').select('*').order('name', { ascending: true });
+        if (pantryData) setPantry(pantryData);
+
         const { data: setData } = await supabase.from('settings').select('*');
         if (setData) {
           const curr = setData.find(s => s.key === 'currency');
           if (curr) setCurrency(curr.value);
+          const gemKey = setData.find(s => s.key === 'gemini_api_key');
+          if (gemKey) setGeminiApiKey(gemKey.value);
         }
       } else {
         // LocalStorage Fallback
@@ -87,8 +108,14 @@ export default function Home() {
         const localPrices = localStorage.getItem('dietcraft_price_history');
         if (localPrices) setPriceHistory(JSON.parse(localPrices));
 
+        const localPantry = localStorage.getItem('dietcraft_pantry');
+        if (localPantry) setPantry(JSON.parse(localPantry));
+
         const localCurr = localStorage.getItem('dietcraft_currency');
         if (localCurr) setCurrency(localCurr);
+
+        const localGemKey = localStorage.getItem('dietcraft_gemini_key');
+        if (localGemKey) setGeminiApiKey(localGemKey);
       }
     } catch (err) {
       console.error('Failed to load data', err);
@@ -119,6 +146,55 @@ export default function Home() {
       return matchCat && matchSearch;
     });
   }, [recipes, recipeCategory, recipeSearch]);
+
+  // Pantry Filtered List
+  const filteredPantry = useMemo(() => {
+    return pantry.filter(item => {
+      const matchCat = pantryCategory === 'All' || item.category === pantryCategory;
+      const matchSearch = !pantrySearch ||
+        item.name.toLowerCase().includes(pantrySearch.toLowerCase()) ||
+        (item.notes && item.notes.toLowerCase().includes(pantrySearch.toLowerCase()));
+      return matchCat && matchSearch;
+    });
+  }, [pantry, pantryCategory, pantrySearch]);
+
+  // Upcoming Needs: Calculate ingredient usage planned for the next 14 days
+  const upcomingNeeds = useMemo(() => {
+    const todayStr = new Date().toISOString().split('T')[0];
+    const twoWeeksLater = new Date();
+    twoWeeksLater.setDate(twoWeeksLater.getDate() + 14);
+    const twoWeeksStr = twoWeeksLater.toISOString().split('T')[0];
+
+    const needs = {}; // key: lowercase_name -> { totalQty, unit, mealCount, meals: [] }
+
+    mealPlans.forEach(plan => {
+      if (plan.date >= todayStr && plan.date <= twoWeeksStr && plan.recipe_id) {
+        const recipe = recipes.find(r => r.id === plan.recipe_id);
+        if (!recipe || !recipe.ingredients) return;
+        const scale = (plan.servings || 2) / (recipe.servings || 2);
+
+        recipe.ingredients.forEach(ing => {
+          const key = ing.name.toLowerCase().trim();
+          const qty = (parseFloat(ing.quantity) || 0) * scale;
+          if (!needs[key]) {
+            needs[key] = {
+              totalQty: 0,
+              unit: ing.unit,
+              mealCount: 0,
+              meals: []
+            };
+          }
+          needs[key].totalQty += qty;
+          needs[key].mealCount += 1;
+          if (!needs[key].meals.includes(recipe.title)) {
+            needs[key].meals.push(recipe.title);
+          }
+        });
+      }
+    });
+
+    return needs;
+  }, [mealPlans, recipes]);
 
   // Calendar Helpers
   const monthData = useMemo(() => {
@@ -319,8 +395,126 @@ export default function Home() {
     showToast('Month automatically planned with delicious meals!');
   };
 
-  // Generate Monthly Shopping List
-  const handleGenerateShoppingList = (name, startDate, endDate) => {
+  // Pantry Handlers
+  const handleSavePantryItem = async (itemData) => {
+    try {
+      const existingIdx = pantry.findIndex(p => 
+        (itemData.id && p.id === itemData.id) ||
+        (p.name.toLowerCase().trim() === itemData.name.toLowerCase().trim() && p.unit.toLowerCase().trim() === itemData.unit.toLowerCase().trim())
+      );
+
+      let updatedPantry;
+      const cleanItem = {
+        id: itemData.id || Date.now(),
+        name: itemData.name.trim(),
+        quantity: Math.max(0, parseFloat(itemData.quantity) || 0),
+        unit: itemData.unit.trim(),
+        category: itemData.category || 'Pantry',
+        expiry_date: itemData.expiry_date || null,
+        notes: itemData.notes || '',
+        updated_at: new Date().toISOString()
+      };
+
+      if (existingIdx >= 0) {
+        updatedPantry = [...pantry];
+        updatedPantry[existingIdx] = { ...updatedPantry[existingIdx], ...cleanItem };
+      } else {
+        updatedPantry = [cleanItem, ...pantry];
+      }
+
+      setPantry(updatedPantry);
+      localStorage.setItem('dietcraft_pantry', JSON.stringify(updatedPantry));
+
+      if (isSupabaseConfigured && supabase) {
+        await supabase.from('pantry').upsert([cleanItem], { onConflict: 'name, unit' });
+      }
+
+      setPantryModal(null);
+      showToast(existingIdx >= 0 ? 'Pantry item updated!' : 'Item added to pantry!');
+    } catch (err) {
+      console.error('Failed to save pantry item', err);
+      showToast('Saved to local storage');
+      setPantryModal(null);
+    }
+  };
+
+  const handleQuickAdjustPantry = async (id, delta) => {
+    const item = pantry.find(p => p.id === id);
+    if (!item) return;
+    const newQty = Math.max(0, Math.round(((parseFloat(item.quantity) || 0) + delta) * 100) / 100);
+    const updated = pantry.map(p => p.id === id ? { ...p, quantity: newQty } : p);
+    setPantry(updated);
+    localStorage.setItem('dietcraft_pantry', JSON.stringify(updated));
+
+    if (isSupabaseConfigured && supabase) {
+      supabase.from('pantry').update({ quantity: newQty }).eq('id', id);
+    }
+  };
+
+  const handleDeletePantryItem = async (id) => {
+    const updated = pantry.filter(p => p.id !== id);
+    setPantry(updated);
+    localStorage.setItem('dietcraft_pantry', JSON.stringify(updated));
+
+    if (isSupabaseConfigured && supabase) {
+      supabase.from('pantry').delete().eq('id', id);
+    }
+    showToast('Item removed from pantry');
+  };
+
+  // Restock Pantry from Checked Shopping List Items
+  const handleRestockPantryFromShopping = async () => {
+    if (!activeList) return;
+    const checkedItems = (activeList.items || []).filter(i => i.is_checked);
+    if (checkedItems.length === 0) {
+      showToast('No checked items found to restock.');
+      return;
+    }
+
+    let updatedPantry = [...pantry];
+    const itemsToUpsert = [];
+
+    checkedItems.forEach(ci => {
+      const idx = updatedPantry.findIndex(p => 
+        p.name.toLowerCase().trim() === ci.name.toLowerCase().trim() &&
+        p.unit.toLowerCase().trim() === ci.unit.toLowerCase().trim()
+      );
+
+      if (idx >= 0) {
+        const newQty = (parseFloat(updatedPantry[idx].quantity) || 0) + (parseFloat(ci.quantity) || 0);
+        updatedPantry[idx] = {
+          ...updatedPantry[idx],
+          quantity: Math.round(newQty * 100) / 100,
+          updated_at: new Date().toISOString()
+        };
+        itemsToUpsert.push(updatedPantry[idx]);
+      } else {
+        const newItem = {
+          id: Date.now() + Math.random(),
+          name: ci.name,
+          quantity: parseFloat(ci.quantity) || 1,
+          unit: ci.unit || 'pcs',
+          category: ci.category || 'Pantry',
+          expiry_date: null,
+          notes: 'Restocked from shopping list'
+        };
+        updatedPantry.unshift(newItem);
+        itemsToUpsert.push(newItem);
+      }
+    });
+
+    setPantry(updatedPantry);
+    localStorage.setItem('dietcraft_pantry', JSON.stringify(updatedPantry));
+
+    if (isSupabaseConfigured && supabase && itemsToUpsert.length > 0) {
+      supabase.from('pantry').upsert(itemsToUpsert, { onConflict: 'name, unit' });
+    }
+
+    showToast(`Transferred ${checkedItems.length} purchased items to your pantry! 📦`);
+  };
+
+  // Generate Monthly Shopping List (with Pantry deduction support)
+  const handleGenerateShoppingList = (name, startDate, endDate, deductPantryStock = true) => {
     const relevantPlans = mealPlans.filter(p => p.date >= startDate && p.date <= endDate && p.recipe_id);
     if (relevantPlans.length === 0) {
       showToast('No planned meals with recipes found in this date range.');
@@ -360,12 +554,38 @@ export default function Home() {
       });
     });
 
-    const items = Object.values(aggregated).map(item => ({
-      ...item,
-      quantity: Math.round(item.quantity * 100) / 100
-    }));
+    // If deductPantryStock is enabled, subtract what is currently in the pantry
+    let rawItems = Object.values(aggregated);
+    if (deductPantryStock && pantry.length > 0) {
+      rawItems = rawItems.map(item => {
+        const inPantry = pantry.find(p => 
+          p.name.toLowerCase().trim() === item.name.toLowerCase().trim() &&
+          p.unit.toLowerCase().trim() === item.unit.toLowerCase().trim()
+        );
+        if (inPantry && (parseFloat(inPantry.quantity) || 0) > 0) {
+          const needed = Math.max(0, item.quantity - parseFloat(inPantry.quantity));
+          return {
+            ...item,
+            quantity: Math.round(needed * 100) / 100,
+            notes: `Reduced from ${Math.round(item.quantity * 100) / 100} (${inPantry.quantity} ${inPantry.unit} in pantry)`
+          };
+        }
+        return item;
+      }).filter(item => item.quantity > 0); // Only keep items that still need purchasing
+    } else {
+      rawItems = rawItems.map(item => ({
+        ...item,
+        quantity: Math.round(item.quantity * 100) / 100
+      }));
+    }
 
-    const totalEst = items.reduce((acc, i) => acc + (parseFloat(i.estimated_price) || 0), 0);
+    if (rawItems.length === 0) {
+      showToast('All needed ingredients are already fully stocked in your pantry! 🎉');
+      setGenerateShoppingModal(false);
+      return;
+    }
+
+    const totalEst = rawItems.reduce((acc, i) => acc + (parseFloat(i.estimated_price) || 0), 0);
 
     const newList = {
       id: Date.now(),
@@ -373,7 +593,7 @@ export default function Home() {
       start_date: startDate,
       end_date: endDate,
       created_at: new Date().toISOString(),
-      items,
+      items: rawItems,
       total_estimated: totalEst,
       total_spent: 0
     };
@@ -389,7 +609,111 @@ export default function Home() {
     setGenerateShoppingModal(false);
     setActiveShoppingListId(newList.id);
     setActiveView('shopping');
-    showToast('Monthly grocery list generated!');
+    showToast(deductPantryStock ? 'Smart grocery list generated (pantry deducted)!' : 'Monthly grocery list generated!');
+  };
+
+  // AI Actions Call Helper
+  const callAiEndpoint = async (action, payload) => {
+    setAiLoading(true);
+    try {
+      const res = await fetch('/api/ai', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action,
+          payload,
+          userApiKey: geminiApiKey || undefined
+        })
+      });
+
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        throw new Error(data.error || 'AI request failed');
+      }
+      return data;
+    } catch (err) {
+      console.error('AI Error:', err);
+      showToast(`AI Error: ${err.message}`);
+      return null;
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  // AI Action: Ask what to cook from pantry
+  const handleAskAiChef = async () => {
+    if (pantry.length === 0) {
+      showToast('Your pantry is empty! Add ingredients first.');
+      return;
+    }
+    setAiChefModal(true);
+    setAiRecipeResults(null);
+
+    const availablePantry = pantry.filter(p => (parseFloat(p.quantity) || 0) > 0);
+    const result = await callAiEndpoint('suggest_from_pantry', { pantry: availablePantry });
+    if (result && result.suggestions) {
+      setAiRecipeResults(result.suggestions);
+    }
+  };
+
+  // AI Action: Import raw recipe text
+  const handleAiParseRecipe = async () => {
+    if (!aiImportText.trim()) return;
+    const result = await callAiEndpoint('parse_recipe', { text: aiImportText });
+    if (result && result.recipe) {
+      setEditingRecipe({
+        ...result.recipe,
+        id: null
+      });
+      setIsEditingRecipe(true);
+      setAiImportModal(false);
+      setAiImportText('');
+      showToast('Recipe parsed by AI! Review and save.');
+    }
+  };
+
+  // AI Action: Smart Meal Plan Generation
+  const handleAiSmartPlan = async (startDate, endDate, mealsToPlan, targetCalories, dietaryNotes) => {
+    const result = await callAiEndpoint('smart_plan', {
+      startDate,
+      endDate,
+      pantry,
+      recipes,
+      mealsToPlan,
+      targetCalories,
+      dietaryNotes
+    });
+
+    if (result && result.plan) {
+      // Merge suggested plans
+      let newPlans = [...mealPlans];
+      result.plan.forEach(item => {
+        newPlans = newPlans.filter(p => !(p.date === item.date && p.meal_type.toLowerCase() === item.meal_type.toLowerCase()));
+        newPlans.push({
+          id: Date.now() + Math.random(),
+          date: item.date,
+          meal_type: item.meal_type.toLowerCase(),
+          recipe_id: item.recipe_id || null,
+          custom_title: item.recipe_id ? null : item.meal_name,
+          servings: 2
+        });
+      });
+
+      setMealPlans(newPlans);
+      localStorage.setItem('dietcraft_meal_plans', JSON.stringify(newPlans));
+      setAiSmartPlanModal(false);
+      showToast('AI customized your meal plan using pantry items!');
+    }
+  };
+
+  // Save Gemini Key in Settings
+  const handleSaveGeminiKey = (key) => {
+    setGeminiApiKey(key);
+    localStorage.setItem('dietcraft_gemini_key', key);
+    if (isSupabaseConfigured && supabase) {
+      supabase.from('settings').upsert({ key: 'gemini_api_key', value: key }, { onConflict: 'key' });
+    }
+    showToast('Gemini API Key saved!');
   };
 
   // Toggle Shopping Item Checked
@@ -531,6 +855,15 @@ export default function Home() {
             </li>
             <li>
               <button 
+                className={`nav-item ${activeView === 'pantry' ? 'active' : ''}`}
+                onClick={() => { setActiveView('pantry'); setActiveShoppingListId(null); }}
+                style={{ width: '100%', textAlign: 'left', background: 'none', border: 'none' }}
+              >
+                <span>📦 Pantry & Usage</span>
+              </button>
+            </li>
+            <li>
+              <button 
                 className={`nav-item ${activeView === 'shopping' ? 'active' : ''}`}
                 onClick={() => { setActiveView('shopping'); }}
                 style={{ width: '100%', textAlign: 'left', background: 'none', border: 'none' }}
@@ -581,7 +914,10 @@ export default function Home() {
                   <h1>Recipe Database</h1>
                   <p>Curate recipes with ingredients that automatically feed your monthly grocery lists.</p>
                 </div>
-                <div className="view-actions">
+                <div className="view-actions" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                  <button className="btn btn-secondary ai-glow-btn" onClick={() => setAiImportModal(true)}>
+                    ✨ AI Import Recipe
+                  </button>
                   <button className="btn btn-primary" onClick={() => { setEditingRecipe(null); setIsEditingRecipe(true); }}>
                     + Create New Recipe
                   </button>
@@ -655,7 +991,8 @@ export default function Home() {
                   <h1>Monthly Meal Planner</h1>
                   <p>Plan meals for each day. Scale servings and generate complete monthly grocery lists with 1 tap.</p>
                 </div>
-                <div className="view-actions">
+                <div className="view-actions" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                  <button className="btn btn-secondary ai-glow-btn" onClick={() => setAiSmartPlanModal(true)}>✨ AI Smart Plan</button>
                   <button className="btn btn-accent" onClick={() => setAutoPlanModal(true)}>⚡ Auto-Plan Month</button>
                   <button className="btn btn-primary" onClick={() => setGenerateShoppingModal(true)}>🛒 Generate Grocery List</button>
                 </div>
@@ -827,7 +1164,10 @@ export default function Home() {
                     </div>
                   </div>
 
-                  <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '16px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginBottom: '16px', flexWrap: 'wrap' }}>
+                    <button className="btn btn-secondary btn-sm" onClick={handleRestockPantryFromShopping}>
+                      📥 Restock Pantry with Checked Items
+                    </button>
                     <button className="btn btn-secondary btn-sm" onClick={() => setCustomItemModal(true)}>+ Add Extra Item</button>
                   </div>
 
@@ -893,6 +1233,162 @@ export default function Home() {
             </section>
           )}
 
+          {/* VIEW: PANTRY & INVENTORY */}
+          {activeView === 'pantry' && (
+            <section className="view-panel active">
+              <div className="view-header">
+                <div className="view-title-group">
+                  <h1>Pantry Inventory & Usage</h1>
+                  <p>Track current stock, identify ingredients planned for upcoming meals, and get AI chef recipe ideas.</p>
+                </div>
+                <div className="view-actions" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                  <button className="btn btn-secondary ai-glow-btn" onClick={handleAskAiChef}>
+                    ✨ AI: What can I cook?
+                  </button>
+                  <button className="btn btn-primary" onClick={() => setPantryModal('add')}>
+                    + Add Pantry Item
+                  </button>
+                </div>
+              </div>
+
+              {/* Filter & Search Bar */}
+              <div className="filter-bar">
+                <div className="search-input-wrap">
+                  <span>🔍</span>
+                  <input 
+                    type="text" 
+                    placeholder="Search pantry items..." 
+                    value={pantrySearch}
+                    onChange={(e) => setPantrySearch(e.target.value)}
+                  />
+                </div>
+                <div className="category-chips">
+                  {['All', 'Produce', 'Meat/Seafood', 'Dairy', 'Bakery', 'Pantry', 'Spices', 'Canned', 'Frozen', 'Other'].map(cat => (
+                    <button 
+                      key={cat} 
+                      className={`chip ${pantryCategory === cat ? 'active' : ''}`}
+                      onClick={() => setPantryCategory(cat)}
+                    >
+                      {cat}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Summary Stats Bar */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '14px', marginBottom: '20px' }}>
+                <div style={{ background: 'var(--bg-card)', padding: '14px 18px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
+                  <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Total Unique Items</div>
+                  <div style={{ fontSize: '1.4rem', fontWeight: 700, color: '#34d399' }}>{pantry.length}</div>
+                </div>
+                <div style={{ background: 'var(--bg-card)', padding: '14px 18px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
+                  <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Low Stock / Depleted</div>
+                  <div style={{ fontSize: '1.4rem', fontWeight: 700, color: '#f59e0b' }}>
+                    {pantry.filter(p => (parseFloat(p.quantity) || 0) <= 0).length}
+                  </div>
+                </div>
+                <div style={{ background: 'var(--bg-card)', padding: '14px 18px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
+                  <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Planned Meal Demands (Next 14d)</div>
+                  <div style={{ fontSize: '1.4rem', fontWeight: 700, color: 'var(--accent-blue)' }}>
+                    {Object.keys(upcomingNeeds).length} ingredients
+                  </div>
+                </div>
+              </div>
+
+              {/* Pantry Cards Grid */}
+              <div className="pantry-grid">
+                {filteredPantry.length === 0 ? (
+                  <div style={{ gridColumn: '1 / -1', textAlign: 'center', padding: '60px 20px', color: 'var(--text-secondary)' }}>
+                    <div style={{ fontSize: '2.5rem', marginBottom: '12px' }}>📦</div>
+                    <p style={{ fontSize: '1.2rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '8px' }}>
+                      {pantrySearch ? 'No matching pantry items found' : 'Your pantry is currently empty'}
+                    </p>
+                    <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginBottom: '20px', maxWidth: '420px', margin: '0 auto 20px' }}>
+                      Add ingredients you have in your fridge or cupboard. DietCraft will deduct them when planning groceries and suggest dishes with AI!
+                    </p>
+                    <button className="btn btn-primary" onClick={() => setPantryModal('add')}>
+                      + Add First Pantry Item
+                    </button>
+                  </div>
+                ) : (
+                  filteredPantry.map(item => {
+                    const usage = upcomingNeeds[item.name.toLowerCase().trim()];
+                    const qty = parseFloat(item.quantity) || 0;
+                    const isLow = qty <= 0;
+                    const willRunOut = usage && qty < usage.totalQty;
+
+                    return (
+                      <div key={item.id} className="pantry-card">
+                        <div className="pantry-card-header">
+                          <span className={`recipe-category-badge badge-${item.category.toLowerCase().replace('/', '-')}`}>
+                            {item.category}
+                          </span>
+                          <div style={{ display: 'flex', gap: '6px' }}>
+                            <button 
+                              className="btn btn-sm btn-icon" 
+                              style={{ background: 'none', border: 'none', color: 'var(--text-muted)', padding: '4px', cursor: 'pointer' }}
+                              title="Edit item"
+                              onClick={() => setPantryModal(item)}
+                            >
+                              ✏️
+                            </button>
+                            <button 
+                              className="btn btn-sm btn-icon" 
+                              style={{ background: 'none', border: 'none', color: 'var(--text-muted)', padding: '4px', cursor: 'pointer' }}
+                              title="Delete item"
+                              onClick={() => handleDeletePantryItem(item.id)}
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="pantry-card-title">{item.name}</div>
+                        {item.notes && <div className="pantry-card-notes">{item.notes}</div>}
+
+                        {/* Planned Usage Badge */}
+                        {usage ? (
+                          <div className="planned-use-badge">
+                            <span>📅 Planned use: <strong>{Math.round(usage.totalQty * 100) / 100} {usage.unit}</strong> across {usage.mealCount} meals</span>
+                            {willRunOut && (
+                              <div style={{ color: '#ef4444', fontWeight: 600, marginTop: '2px', fontSize: '0.75rem' }}>
+                                ⚠️ Need {Math.round((usage.totalQty - qty) * 100) / 100} more for planned meals
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', margin: '4px 0 8px' }}>
+                            No upcoming meals scheduled with this item
+                          </div>
+                        )}
+
+                        <div className="pantry-card-qty-row">
+                          <div>
+                            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'block' }}>Current Stock</span>
+                            <span style={{ fontSize: '1.25rem', fontWeight: 700, color: isLow ? '#ef4444' : '#34d399' }}>
+                              {qty} <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>{item.unit}</span>
+                            </span>
+                          </div>
+
+                          <div className="pantry-qty-actions">
+                            <button className="qty-btn" title="Decrease by 1" onClick={() => handleQuickAdjustPantry(item.id, -1)}>−</button>
+                            <button className="qty-btn" title="Increase by 1" onClick={() => handleQuickAdjustPantry(item.id, 1)}>+</button>
+                          </div>
+                        </div>
+
+                        {item.expiry_date && (
+                          <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '8px', borderTop: '1px solid rgba(255,255,255,0.04)', paddingTop: '6px' }}>
+                            ⏳ Expires: {item.expiry_date}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </section>
+          )}
+
           {/* VIEW 4: SETTINGS & SUPABASE CLOUD SYNC */}
           {activeView === 'settings' && (
             <section className="view-panel active">
@@ -945,9 +1441,42 @@ export default function Home() {
                   </div>
                   <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', display: 'flex', flexDirection: 'column', gap: '6px' }}>
                     <div>Recipes in Database: <strong style={{ color: 'var(--text-primary)' }}>{recipes.length}</strong></div>
+                    <div>Pantry Items: <strong style={{ color: 'var(--text-primary)' }}>{pantry.length}</strong></div>
                     <div>Meals Planned: <strong style={{ color: 'var(--text-primary)' }}>{mealPlans.length}</strong></div>
                     <div>Shopping Lists: <strong style={{ color: 'var(--text-primary)' }}>{shoppingLists.length}</strong></div>
                   </div>
+                </div>
+
+                {/* Gemini AI Configuration Card */}
+                <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-lg)', padding: '24px' }}>
+                  <h3 style={{ fontSize: '1.15rem', fontWeight: 700, color: 'var(--accent-blue)', marginBottom: '8px' }}>
+                    ✨ Google Gemini AI Assistant
+                  </h3>
+                  <p style={{ color: 'var(--text-secondary)', fontSize: '0.88rem', marginBottom: '14px' }}>
+                    Powers pantry recipe suggestions, natural language recipe importing, and smart meal planning.
+                  </p>
+                  <form onSubmit={(e) => {
+                    e.preventDefault();
+                    const fd = new FormData(e.target);
+                    handleSaveGeminiKey(fd.get('gemini_key'));
+                  }}>
+                    <div className="form-group" style={{ marginBottom: '12px' }}>
+                      <label className="form-label">Gemini API Key</label>
+                      <input 
+                        type="password" 
+                        name="gemini_key" 
+                        defaultValue={geminiApiKey} 
+                        className="form-control" 
+                        placeholder="AIzaSy... (optional if GEMINI_API_KEY is set in Vercel)" 
+                      />
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                        Status: <strong style={{ color: geminiApiKey ? '#34d399' : 'var(--text-secondary)' }}>{geminiApiKey ? 'Custom Key Configured' : 'Using Server Environment'}</strong>
+                      </span>
+                      <button type="submit" className="btn btn-secondary btn-sm">Save Key</button>
+                    </div>
+                  </form>
                 </div>
               </div>
 
@@ -996,6 +1525,10 @@ export default function Home() {
             <button className={`bottom-nav-item ${activeView === 'planner' ? 'active' : ''}`} onClick={() => setActiveView('planner')}>
               <span>📅</span>
               <span>Planner</span>
+            </button>
+            <button className={`bottom-nav-item ${activeView === 'pantry' ? 'active' : ''}`} onClick={() => setActiveView('pantry')}>
+              <span>📦</span>
+              <span>Pantry</span>
             </button>
             <button className={`bottom-nav-item ${activeView === 'shopping' ? 'active' : ''}`} onClick={() => setActiveView('shopping')}>
               <span>🛒</span>
@@ -1186,39 +1719,49 @@ export default function Home() {
               <h3 className="modal-title">🛒 Generate Monthly Grocery List</h3>
               <button className="btn btn-secondary btn-sm btn-icon" onClick={() => setGenerateShoppingModal(false)}>✕</button>
             </div>
-            <form onSubmit={(e) => {
-              e.preventDefault();
-              const fd = new FormData(e.target);
-              handleGenerateShoppingList(
-                fd.get('name'),
-                fd.get('start_date'),
-                fd.get('end_date')
-              );
-            }}>
-              <div className="modal-body">
-                <div className="form-group">
-                  <label className="form-label">List Name</label>
-                  <input type="text" name="name" defaultValue={`${monthData.monthName} ${monthData.year} Grocery List`} className="form-control" required />
-                </div>
-                <div className="form-row">
+              <form onSubmit={(e) => {
+                e.preventDefault();
+                const fd = new FormData(e.target);
+                handleGenerateShoppingList(
+                  fd.get('name'),
+                  fd.get('start_date'),
+                  fd.get('end_date'),
+                  fd.get('deduct_pantry') === 'on'
+                );
+              }}>
+                <div className="modal-body">
                   <div className="form-group">
-                    <label className="form-label">Start Date</label>
-                    <input type="date" name="start_date" defaultValue={monthData.startStr} className="form-control" required />
+                    <label className="form-label">List Name</label>
+                    <input type="text" name="name" defaultValue={`${monthData.monthName} ${monthData.year} Grocery List`} className="form-control" required />
                   </div>
-                  <div className="form-group">
-                    <label className="form-label">End Date</label>
-                    <input type="date" name="end_date" defaultValue={monthData.endStr} className="form-control" required />
+                  <div className="form-row">
+                    <div className="form-group">
+                      <label className="form-label">Start Date</label>
+                      <input type="date" name="start_date" defaultValue={monthData.startStr} className="form-control" required />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">End Date</label>
+                      <input type="date" name="end_date" defaultValue={monthData.endStr} className="form-control" required />
+                    </div>
                   </div>
+                  <div className="form-group" style={{ background: 'var(--bg-surface)', padding: '12px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', marginTop: '8px' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontWeight: 600, color: '#34d399' }}>
+                      <input type="checkbox" name="deduct_pantry" defaultChecked />
+                      📦 Deduct ingredients already in my Pantry
+                    </label>
+                    <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '4px', marginLeft: '22px' }}>
+                      Avoids buying items you already have at home. Only remaining required quantities will be added to the grocery list.
+                    </p>
+                  </div>
+                  <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', marginTop: '10px' }}>
+                    Aggregates all ingredients across your planned meals, multiplies by servings, and categorizes by grocery aisles.
+                  </p>
                 </div>
-                <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>
-                  Aggregates all ingredients across your planned meals, multiplies by servings, and categorizes by grocery aisles.
-                </p>
-              </div>
-              <div className="modal-footer">
-                <button type="button" className="btn btn-secondary" onClick={() => setGenerateShoppingModal(false)}>Cancel</button>
-                <button type="submit" className="btn btn-primary">Generate List</button>
-              </div>
-            </form>
+                <div className="modal-footer">
+                  <button type="button" className="btn btn-secondary" onClick={() => setGenerateShoppingModal(false)}>Cancel</button>
+                  <button type="submit" className="btn btn-primary">Generate List</button>
+                </div>
+              </form>
           </div>
         </div>
       )}
@@ -1311,6 +1854,300 @@ export default function Home() {
             <div className="modal-footer" style={{ justifyContent: 'center' }}>
               <button className="btn btn-primary" onClick={() => setMobileConnectModal(false)}>Got It</button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* 8. Pantry Item Modal (Add / Edit) */}
+      {pantryModal && (
+        <div className="modal-backdrop active" onClick={() => setPantryModal(null)}>
+          <div className="modal-card" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3 className="modal-title">{pantryModal === 'add' ? 'Add Pantry Item' : 'Edit Pantry Item'}</h3>
+              <button className="btn btn-secondary btn-sm btn-icon" onClick={() => setPantryModal(null)}>✕</button>
+            </div>
+            <form onSubmit={(e) => {
+              e.preventDefault();
+              const fd = new FormData(e.target);
+              handleSavePantryItem({
+                id: pantryModal === 'add' ? null : pantryModal.id,
+                name: fd.get('name'),
+                quantity: fd.get('quantity'),
+                unit: fd.get('unit'),
+                category: fd.get('category'),
+                expiry_date: fd.get('expiry_date') || null,
+                notes: fd.get('notes')
+              });
+            }}>
+              <div className="modal-body">
+                <div className="form-group">
+                  <label className="form-label">Ingredient Name</label>
+                  <input 
+                    type="text" 
+                    name="name" 
+                    defaultValue={pantryModal === 'add' ? '' : pantryModal.name} 
+                    className="form-control" 
+                    placeholder="e.g. Olive Oil, Rolled Oats, Eggs" 
+                    required 
+                  />
+                </div>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label className="form-label">Current Stock Quantity</label>
+                    <input 
+                      type="number" 
+                      step="any" 
+                      name="quantity" 
+                      defaultValue={pantryModal === 'add' ? '1' : pantryModal.quantity} 
+                      className="form-control" 
+                      required 
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Unit</label>
+                    <input 
+                      type="text" 
+                      name="unit" 
+                      defaultValue={pantryModal === 'add' ? 'pcs' : pantryModal.unit} 
+                      className="form-control" 
+                      placeholder="g, kg, ml, pcs, cups, pack" 
+                      required 
+                    />
+                  </div>
+                </div>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label className="form-label">Category</label>
+                    <select name="category" defaultValue={pantryModal === 'add' ? 'Pantry' : pantryModal.category} className="form-control">
+                      <option value="Produce">Produce</option>
+                      <option value="Meat/Seafood">Meat/Seafood</option>
+                      <option value="Dairy">Dairy</option>
+                      <option value="Bakery">Bakery</option>
+                      <option value="Pantry">Pantry</option>
+                      <option value="Canned">Canned</option>
+                      <option value="Spices">Spices</option>
+                      <option value="Frozen">Frozen</option>
+                      <option value="Other">Other</option>
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Expiry Date (Optional)</label>
+                    <input 
+                      type="date" 
+                      name="expiry_date" 
+                      defaultValue={pantryModal === 'add' ? '' : (pantryModal.expiry_date || '')} 
+                      className="form-control" 
+                    />
+                  </div>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Notes (Brand, Location, Container)</label>
+                  <input 
+                    type="text" 
+                    name="notes" 
+                    defaultValue={pantryModal === 'add' ? '' : (pantryModal.notes || '')} 
+                    className="form-control" 
+                    placeholder="e.g. Top cupboard, unopened" 
+                  />
+                </div>
+              </div>
+              <div className="modal-footer">
+                <button type="button" className="btn btn-secondary" onClick={() => setPantryModal(null)}>Cancel</button>
+                <button type="submit" className="btn btn-primary">{pantryModal === 'add' ? 'Add to Pantry' : 'Save Changes'}</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* 9. AI Chef Modal: Suggest Dishes from Pantry */}
+      {aiChefModal && (
+        <div className="modal-backdrop active" onClick={() => setAiChefModal(false)}>
+          <div className="modal-card" style={{ maxWidth: '650px' }} onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3 className="modal-title">✨ AI Chef · Recipes From Your Pantry</h3>
+              <button className="btn btn-secondary btn-sm btn-icon" onClick={() => setAiChefModal(false)}>✕</button>
+            </div>
+            <div className="modal-body" style={{ maxHeight: '70vh', overflowY: 'auto' }}>
+              {aiLoading ? (
+                <div style={{ textAlign: 'center', padding: '40px 20px' }}>
+                  <div style={{ fontSize: '2.5rem', marginBottom: '12px', animation: 'spin 2s linear infinite' }}>🍲</div>
+                  <p style={{ fontWeight: 600, color: 'var(--text-primary)', marginBottom: '6px' }}>AI Chef is inspecting your pantry ingredients...</p>
+                  <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Creating custom recipe ideas minimizing extra grocery trips.</p>
+                </div>
+              ) : aiRecipeResults ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                  <p style={{ fontSize: '0.88rem', color: 'var(--text-secondary)' }}>
+                    Here are personalized dish ideas you can make right now based on what's currently in your kitchen:
+                  </p>
+                  {aiRecipeResults.map((sug, idx) => (
+                    <div key={idx} style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '16px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '6px', flexWrap: 'wrap', gap: '6px' }}>
+                        <h4 style={{ fontSize: '1.05rem', fontWeight: 700, color: '#34d399' }}>{sug.title}</h4>
+                        <span style={{ fontSize: '0.78rem', background: 'rgba(52, 211, 153, 0.1)', color: '#34d399', padding: '2px 8px', borderRadius: '4px' }}>
+                          ⏱️ {sug.estimated_time || '20m'} · {sug.category || 'Dinner'}
+                        </span>
+                      </div>
+                      <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '10px' }}>{sug.description}</p>
+                      
+                      <div style={{ fontSize: '0.82rem', marginBottom: '8px' }}>
+                        <strong style={{ color: 'var(--text-primary)' }}>Pantry ingredients used:</strong>{' '}
+                        <span style={{ color: 'var(--text-secondary)' }}>{(sug.used_pantry_items || []).join(', ')}</span>
+                      </div>
+                      {sug.missing_items && sug.missing_items.length > 0 && (
+                        <div style={{ fontSize: '0.82rem', marginBottom: '10px' }}>
+                          <strong style={{ color: '#f59e0b' }}>Optional / Missing items:</strong>{' '}
+                          <span style={{ color: 'var(--text-muted)' }}>{sug.missing_items.join(', ')}</span>
+                        </div>
+                      )}
+
+                      <button 
+                        className="btn btn-primary btn-sm"
+                        style={{ marginTop: '6px' }}
+                        onClick={() => {
+                          setEditingRecipe({
+                            title: sug.title,
+                            category: sug.category || 'Dinner',
+                            servings: 2,
+                            prep_time: 10,
+                            cook_time: 15,
+                            description: sug.description,
+                            instructions: sug.instructions || 'Prepare ingredients and cook as desired.',
+                            ingredients: (sug.used_pantry_items || []).map(name => {
+                              const found = pantry.find(p => p.name.toLowerCase() === name.toLowerCase());
+                              return {
+                                name,
+                                quantity: found ? found.quantity : 1,
+                                unit: found ? found.unit : 'pcs',
+                                category: found ? found.category : 'Pantry'
+                              };
+                            })
+                          });
+                          setIsEditingRecipe(true);
+                          setAiChefModal(false);
+                        }}
+                      >
+                        + Save to My Recipes
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div style={{ textAlign: 'center', padding: '30px', color: 'var(--text-secondary)' }}>
+                  <p>Click below to let Gemini analyze your current pantry inventory and generate recipe ideas.</p>
+                  <button className="btn btn-primary" style={{ marginTop: '12px' }} onClick={handleAskAiChef}>
+                    Generate Suggestions
+                  </button>
+                </div>
+              )}
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-secondary" onClick={() => setAiChefModal(false)}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 10. AI Recipe Importer Modal */}
+      {aiImportModal && (
+        <div className="modal-backdrop active" onClick={() => setAiImportModal(false)}>
+          <div className="modal-card" style={{ maxWidth: '600px' }} onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3 className="modal-title">✨ AI Recipe Importer</h3>
+              <button className="btn btn-secondary btn-sm btn-icon" onClick={() => setAiImportModal(false)}>✕</button>
+            </div>
+            <div className="modal-body">
+              <p style={{ fontSize: '0.88rem', color: 'var(--text-secondary)', marginBottom: '12px' }}>
+                Paste any unstructured recipe from a website, social media, or family note. Gemini will automatically extract servings, prep/cook times, and parse ingredients with exact quantities and units.
+              </p>
+              <div className="form-group">
+                <textarea 
+                  rows="9"
+                  className="form-control"
+                  placeholder="Paste recipe text or ingredients here... (e.g. 'Creamy Garlic Chicken: 2 chicken breasts cut in cubes, 200ml heavy cream, 4 garlic cloves minced, 1 tbsp olive oil...')"
+                  value={aiImportText}
+                  onChange={(e) => setAiImportText(e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button type="button" className="btn btn-secondary" onClick={() => setAiImportModal(false)}>Cancel</button>
+              <button 
+                type="button" 
+                className="btn btn-primary" 
+                disabled={aiLoading || !aiImportText.trim()} 
+                onClick={handleAiParseRecipe}
+              >
+                {aiLoading ? 'AI is Parsing...' : 'Parse & Import Recipe'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 11. AI Smart Plan Modal */}
+      {aiSmartPlanModal && (
+        <div className="modal-backdrop active" onClick={() => setAiSmartPlanModal(false)}>
+          <div className="modal-card" style={{ maxWidth: '540px' }} onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3 className="modal-title">✨ AI Smart Meal Planner</h3>
+              <button className="btn btn-secondary btn-sm btn-icon" onClick={() => setAiSmartPlanModal(false)}>✕</button>
+            </div>
+            <form onSubmit={(e) => {
+              e.preventDefault();
+              const fd = new FormData(e.target);
+              const meals = [];
+              if (fd.get('breakfast')) meals.push('breakfast');
+              if (fd.get('lunch')) meals.push('lunch');
+              if (fd.get('dinner')) meals.push('dinner');
+              handleAiSmartPlan(
+                fd.get('start_date'),
+                fd.get('end_date'),
+                meals,
+                fd.get('target_calories') ? parseInt(fd.get('target_calories'), 10) : null,
+                aiDietaryNotes
+              );
+            }}>
+              <div className="modal-body">
+                <p style={{ fontSize: '0.88rem', color: 'var(--text-secondary)', marginBottom: '14px' }}>
+                  Gemini analyzes your pantry stock and recipe collection to build an optimized meal calendar that uses up expiring ingredients first.
+                </p>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label className="form-label">Start Date</label>
+                    <input type="date" name="start_date" defaultValue={monthData.startStr} className="form-control" required />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">End Date</label>
+                    <input type="date" name="end_date" defaultValue={monthData.endStr} className="form-control" required />
+                  </div>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Meals to Plan</label>
+                  <div style={{ display: 'flex', gap: '14px', marginTop: '4px' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><input type="checkbox" name="breakfast" defaultChecked /> Breakfast</label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><input type="checkbox" name="lunch" defaultChecked /> Lunch</label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><input type="checkbox" name="dinner" defaultChecked /> Dinner</label>
+                  </div>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Dietary Preferences or Restrictions</label>
+                  <input 
+                    type="text" 
+                    value={aiDietaryNotes} 
+                    onChange={e => setAiDietaryNotes(e.target.value)} 
+                    className="form-control" 
+                    placeholder="e.g. High protein, vegetarian lunches, use up tomatoes first" 
+                  />
+                </div>
+              </div>
+              <div className="modal-footer">
+                <button type="button" className="btn btn-secondary" onClick={() => setAiSmartPlanModal(false)}>Cancel</button>
+                <button type="submit" className="btn btn-primary" disabled={aiLoading}>
+                  {aiLoading ? 'AI Generating Plan...' : 'Generate AI Plan'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

@@ -100,3 +100,19 @@ CREATE POLICY "Allow anon all on shopping_lists" ON shopping_lists FOR ALL USING
 CREATE POLICY "Allow anon all on shopping_items" ON shopping_items FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow anon all on price_history" ON price_history FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow anon all on settings" ON settings FOR ALL USING (true) WITH CHECK (true);
+
+-- 8. Pantry Inventory Table ("What we currently have")
+CREATE TABLE IF NOT EXISTS pantry (
+    id BIGSERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    quantity NUMERIC NOT NULL DEFAULT 1,
+    unit TEXT NOT NULL DEFAULT 'pcs',
+    category TEXT NOT NULL DEFAULT 'Pantry',
+    expiry_date DATE,
+    notes TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    CONSTRAINT unique_pantry_item UNIQUE(name, unit)
+);
+
+ALTER TABLE pantry ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow anon all on pantry" ON pantry FOR ALL USING (true) WITH CHECK (true);
