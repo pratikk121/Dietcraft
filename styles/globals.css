@@ -172,7 +172,7 @@ body {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  padding-bottom: 80px; /* Space for mobile nav */
+  padding-bottom: calc(85px + env(safe-area-inset-bottom, 0px)); /* Space for mobile nav */
 }
 
 /* Mobile Header (Hidden on Desktop) */
@@ -195,12 +195,12 @@ body {
   bottom: 0;
   left: 0;
   right: 0;
-  background-color: rgba(30, 41, 59, 0.95);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  background-color: rgba(30, 41, 59, 0.96);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
   border-top: 1px solid var(--border-color);
   z-index: 50;
-  padding: 8px 12px;
+  padding: 8px 12px calc(8px + env(safe-area-inset-bottom, 0px)) 12px;
   justify-content: space-around;
 }
 
@@ -941,8 +941,30 @@ body {
   to { opacity: 1; transform: translateY(0); }
 }
 
+/* Ingredient Form Row Styling */
+.ingredient-form-row {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr 1.5fr auto;
+  gap: 8px;
+  margin-bottom: 8px;
+  align-items: center;
+  background: rgba(255, 255, 255, 0.02);
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.day-weekday-label {
+  display: none;
+}
+
 /* Mobile Responsiveness */
 @media (max-width: 768px) {
+  /* Prevent iOS/Android input auto-zoom */
+  input, select, textarea {
+    font-size: 16px !important;
+  }
+
   .sidebar {
     display: none;
   }
@@ -959,6 +981,20 @@ body {
     padding: 18px 14px;
   }
 
+  .form-row {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .modal-card {
+    max-height: 94vh;
+    border-radius: 16px;
+  }
+
+  .modal-body {
+    padding: 16px;
+  }
+
   .month-view-grid {
     grid-template-columns: 1fr;
     gap: 8px;
@@ -970,6 +1006,15 @@ body {
 
   .day-cell {
     min-height: auto;
+    padding: 12px;
+  }
+
+  .day-weekday-label {
+    display: inline-block;
+    color: var(--text-muted);
+    font-size: 0.82rem;
+    margin-left: 6px;
+    font-weight: 500;
   }
 
   .active-shopping-header {
@@ -979,5 +1024,29 @@ body {
 
   .recipes-grid, .shopping-lists-grid {
     grid-template-columns: 1fr;
+  }
+
+  /* Responsive ingredient row on mobile */
+  .ingredient-form-row {
+    grid-template-columns: 1fr auto;
+    padding: 10px;
+    gap: 8px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+  }
+
+  .ingredient-form-row .ing-name-wrap {
+    grid-column: 1 / 2;
+  }
+
+  .ingredient-form-row .ing-del-btn {
+    grid-column: 2 / 3;
+  }
+
+  .ingredient-form-row .ing-details-wrap {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: 1fr 1fr 1.4fr;
+    gap: 6px;
   }
 }

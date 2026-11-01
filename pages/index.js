@@ -459,6 +459,21 @@ export default function Home() {
     showToast('Item added to grocery list!');
   };
 
+  // Delete Shopping List Item
+  const handleDeleteShoppingItem = (itemId) => {
+    if (!activeList) return;
+    const updatedItems = activeList.items.filter(i => i.id !== itemId);
+    const totalSpent = updatedItems.reduce((acc, i) => acc + (parseFloat(i.actual_price) || 0), 0);
+    const updatedList = { ...activeList, items: updatedItems, total_spent: totalSpent };
+    const updatedLists = shoppingLists.map(l => l.id === activeList.id ? updatedList : l);
+    setShoppingLists(updatedLists);
+    localStorage.setItem('dietcraft_shopping_lists', JSON.stringify(updatedLists));
+    if (isSupabaseConfigured && supabase) {
+      supabase.from('shopping_items').delete().eq('id', itemId);
+    }
+    showToast('Item removed from grocery list');
+  };
+
   // Delete Shopping List
   const handleDeleteShoppingList = (id) => {
     if (!confirm('Delete this shopping list?')) return;
@@ -690,12 +705,17 @@ export default function Home() {
                   const dateStr = `${monthData.year}-${pad(monthData.month + 1)}-${pad(day)}`;
                   const dayMeals = mealPlans.filter(p => p.date === dateStr);
                   const isToday = new Date().toDateString() === new Date(monthData.year, monthData.month, day).toDateString();
+                  const cellDate = new Date(monthData.year, monthData.month, day);
+                  const weekdayShort = cellDate.toLocaleDateString('en-US', { weekday: 'short' });
 
                   return (
                     <div key={dateStr} className={`day-cell ${isToday ? 'today' : ''}`}>
                       <div className="day-cell-top">
-                        <span className="day-number">{day}</span>
-                        <button className="day-add-btn" onClick={() => setMealPlanModal({ date: dateStr, meal_type: 'dinner', servings: 2 })}>+</button>
+                        <div>
+                          <span className="day-number">{day}</span>
+                          <span className="day-weekday-label">· {weekdayShort}</span>
+                        </div>
+                        <button className="day-add-btn" title="Add meal" onClick={() => setMealPlanModal({ date: dateStr, meal_type: 'dinner', servings: 2 })}>+</button>
                       </div>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                         {dayMeals.map(m => {
@@ -838,19 +858,29 @@ export default function Home() {
                                 </div>
                               </div>
 
-                              {/* Price Entry Input */}
-                              <div className="price-input-wrap" title="Enter actual price paid">
-                                <span className="price-currency">{currency}</span>
-                                <input 
-                                  type="number" 
-                                  step="0.01" 
-                                  inputMode="decimal"
-                                  className="price-input"
-                                  placeholder="0.00"
-                                  defaultValue={item.actual_price !== null && item.actual_price !== undefined ? item.actual_price : ''}
-                                  onBlur={(e) => updateItemPrice(item.id, e.target.value)}
-                                  onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); }}
-                                />
+                              {/* Price Entry & Remove Item Action */}
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <div className="price-input-wrap" title="Enter actual price paid" onClick={e => e.stopPropagation()}>
+                                  <span className="price-currency">{currency}</span>
+                                  <input 
+                                    type="number" 
+                                    step="0.01" 
+                                    inputMode="decimal"
+                                    className="price-input"
+                                    placeholder="0.00"
+                                    defaultValue={item.actual_price !== null && item.actual_price !== undefined ? item.actual_price : ''}
+                                    onBlur={(e) => updateItemPrice(item.id, e.target.value)}
+                                    onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); }}
+                                  />
+                                </div>
+                                <button 
+                                  className="btn btn-sm btn-icon" 
+                                  style={{ background: 'none', border: 'none', color: 'var(--text-muted)', padding: '6px', cursor: 'pointer' }} 
+                                  title="Remove item" 
+                                  onClick={(e) => { e.stopPropagation(); handleDeleteShoppingItem(item.id); }}
+                                >
+                                  ✕
+                                </button>
                               </div>
                             </div>
                           ))}
@@ -1398,20 +1428,24 @@ function RecipeEditorModal({ recipe, onSave, onClose }) {
                 <button type="button" className="btn btn-secondary btn-sm" onClick={addIngredientRow}>+ Add Ingredient</button>
               </div>
               {ingredients.map((ing, idx) => (
-                <div key={idx} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1.5fr auto', gap: '8px', marginBottom: '8px', alignItems: 'center' }}>
-                  <input type="text" placeholder="Item name" value={ing.name} onChange={e => updateIngredientRow(idx, 'name', e.target.value)} className="form-control" required />
-                  <input type="number" step="any" placeholder="Qty" value={ing.quantity} onChange={e => updateIngredientRow(idx, 'quantity', e.target.value)} className="form-control" required />
-                  <select value={ing.unit} onChange={e => updateIngredientRow(idx, 'unit', e.target.value)} className="form-control">
-                    {['g', 'kg', 'ml', 'l', 'pcs', 'slices', 'cups', 'tbsp', 'tsp', 'cloves', 'pack'].map(u => (
-                      <option key={u} value={u}>{u}</option>
-                    ))}
-                  </select>
-                  <select value={ing.category} onChange={e => updateIngredientRow(idx, 'category', e.target.value)} className="form-control">
-                    {['Produce', 'Meat/Seafood', 'Dairy', 'Bakery', 'Pantry', 'Spices', 'Canned', 'Frozen', 'Other'].map(c => (
-                      <option key={c} value={c}>{c}</option>
-                    ))}
-                  </select>
-                  <button type="button" className="btn btn-danger btn-sm btn-icon" onClick={() => removeIngredientRow(idx)}>✕</button>
+                <div key={idx} className="ingredient-form-row">
+                  <div className="ing-name-wrap">
+                    <input type="text" placeholder="Ingredient name" value={ing.name} onChange={e => updateIngredientRow(idx, 'name', e.target.value)} className="form-control" required />
+                  </div>
+                  <div className="ing-details-wrap">
+                    <input type="number" step="any" placeholder="Qty" value={ing.quantity} onChange={e => updateIngredientRow(idx, 'quantity', e.target.value)} className="form-control" required />
+                    <select value={ing.unit} onChange={e => updateIngredientRow(idx, 'unit', e.target.value)} className="form-control">
+                      {['g', 'kg', 'ml', 'l', 'pcs', 'slices', 'cups', 'tbsp', 'tsp', 'cloves', 'pack'].map(u => (
+                        <option key={u} value={u}>{u}</option>
+                      ))}
+                    </select>
+                    <select value={ing.category} onChange={e => updateIngredientRow(idx, 'category', e.target.value)} className="form-control">
+                      {['Produce', 'Meat/Seafood', 'Dairy', 'Bakery', 'Pantry', 'Spices', 'Canned', 'Frozen', 'Other'].map(c => (
+                        <option key={c} value={c}>{c}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <button type="button" className="btn btn-danger btn-sm btn-icon ing-del-btn" title="Remove" onClick={() => removeIngredientRow(idx)}>✕</button>
                 </div>
               ))}
             </div>
