@@ -57,8 +57,7 @@ export default function Home() {
       if (isSupabaseConfigured && supabase) {
         // Fetch from Supabase
         const { data: recData } = await supabase.from('recipes').select('*, ingredients(*)');
-        if (recData && recData.length > 0) setRecipes(recData);
-        else setRecipes(INITIAL_RECIPES);
+        setRecipes(recData || []);
 
         const { data: planData } = await supabase.from('meal_plans').select('*, recipes(title, category)');
         if (planData) setMealPlans(planData);
@@ -77,7 +76,7 @@ export default function Home() {
       } else {
         // LocalStorage Fallback
         const localRec = localStorage.getItem('dietcraft_recipes');
-        setRecipes(localRec ? JSON.parse(localRec) : INITIAL_RECIPES);
+        setRecipes(localRec ? JSON.parse(localRec) : []);
 
         const localPlans = localStorage.getItem('dietcraft_meal_plans');
         if (localPlans) setMealPlans(JSON.parse(localPlans));
@@ -162,10 +161,9 @@ export default function Home() {
 
   // Save Recipe
   const handleSaveRecipe = async (recipeData) => {
-    let updated;
-    if (recipeData.id) {
-      updated = recipes.map(r => r.id === recipeData.id ? recipeData : r);
-      if (isSupabaseConfigured && supabase) {
+    if (isSupabaseConfigured && supabase) {
+      if (recipeData.id) {
+        // Update existing recipe
         await supabase.from('recipes').update({
           title: recipeData.title,
           category: recipeData.category,
@@ -176,16 +174,54 @@ export default function Home() {
           instructions: recipeData.instructions,
           tags: recipeData.tags
         }).eq('id', recipeData.id);
+
+        if (recipeData.ingredients) {
+          await supabase.from('ingredients').delete().eq('recipe_id', recipeData.id);
+          const ingRows = recipeData.ingredients.map(ing => ({
+            recipe_id: recipeData.id,
+            name: ing.name.trim(),
+            quantity: parseFloat(ing.quantity) || 1,
+            unit: ing.unit,
+            category: ing.category || 'Pantry'
+          }));
+          await supabase.from('ingredients').insert(ingRows);
+        }
+      } else {
+        // Insert new recipe
+        const { data: inserted } = await supabase.from('recipes').insert([{
+          title: recipeData.title,
+          category: recipeData.category,
+          servings: recipeData.servings,
+          prep_time: recipeData.prep_time,
+          cook_time: recipeData.cook_time,
+          description: recipeData.description,
+          instructions: recipeData.instructions,
+          tags: recipeData.tags
+        }]).select();
+
+        if (inserted && inserted[0] && recipeData.ingredients && recipeData.ingredients.length > 0) {
+          const ingRows = recipeData.ingredients.map(ing => ({
+            recipe_id: inserted[0].id,
+            name: ing.name.trim(),
+            quantity: parseFloat(ing.quantity) || 1,
+            unit: ing.unit,
+            category: ing.category || 'Pantry'
+          }));
+          await supabase.from('ingredients').insert(ingRows);
+        }
       }
+      await loadData();
     } else {
-      const newRec = { ...recipeData, id: Date.now() };
-      updated = [...recipes, newRec];
-      if (isSupabaseConfigured && supabase) {
-        await supabase.from('recipes').insert([newRec]);
+      let updated;
+      if (recipeData.id) {
+        updated = recipes.map(r => r.id === recipeData.id ? recipeData : r);
+      } else {
+        const newRec = { ...recipeData, id: Date.now() };
+        updated = [...recipes, newRec];
       }
+      setRecipes(updated);
+      localStorage.setItem('dietcraft_recipes', JSON.stringify(updated));
     }
-    setRecipes(updated);
-    localStorage.setItem('dietcraft_recipes', JSON.stringify(updated));
     setIsEditingRecipe(false);
     showToast('Recipe saved successfully!');
   };
@@ -563,20 +599,35 @@ export default function Home() {
 
               {/* Recipe Grid */}
               <div className="recipes-grid">
-                {filteredRecipes.map(r => (
-                  <div key={r.id} className="recipe-card" onClick={() => setSelectedRecipeDetail(r)}>
-                    <div className="recipe-card-header">
-                      <span className={`recipe-category-badge badge-${r.category.toLowerCase()}`}>{r.category}</span>
-                      <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{r.servings} Servings</span>
-                    </div>
-                    <h3 className="recipe-title">{r.title}</h3>
-                    <p className="recipe-desc">{r.description || 'No description provided.'}</p>
-                    <div className="recipe-meta-row">
-                      <span>⏱️ {(r.prep_time || 0) + (r.cook_time || 0)}m total</span>
-                      <span>🥗 {r.ingredients ? r.ingredients.length : 0} ingredients</span>
-                    </div>
+                {filteredRecipes.length === 0 ? (
+                  <div style={{ gridColumn: '1 / -1', textAlign: 'center', padding: '60px 20px', color: 'var(--text-secondary)' }}>
+                    <div style={{ fontSize: '2.5rem', marginBottom: '12px' }}>📖</div>
+                    <p style={{ fontSize: '1.2rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '8px' }}>
+                      No recipes yet
+                    </p>
+                    <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginBottom: '20px', maxWidth: '420px', margin: '0 auto 20px' }}>
+                      Add your favorite dishes with ingredients. DietCraft will use them to automatically schedule your meals and build your monthly supermarket shopping lists!
+                    </p>
+                    <button className="btn btn-primary" onClick={() => { setEditingRecipe(null); setIsEditingRecipe(true); }}>
+                      + Create Your First Recipe
+                    </button>
                   </div>
-                ))}
+                ) : (
+                  filteredRecipes.map(r => (
+                    <div key={r.id} className="recipe-card" onClick={() => setSelectedRecipeDetail(r)}>
+                      <div className="recipe-card-header">
+                        <span className={`recipe-category-badge badge-${r.category.toLowerCase()}`}>{r.category}</span>
+                        <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{r.servings} Servings</span>
+                      </div>
+                      <h3 className="recipe-title">{r.title}</h3>
+                      <p className="recipe-desc">{r.description || 'No description provided.'}</p>
+                      <div className="recipe-meta-row">
+                        <span>⏱️ {(r.prep_time || 0) + (r.cook_time || 0)}m total</span>
+                        <span>🥗 {r.ingredients ? r.ingredients.length : 0} ingredients</span>
+                      </div>
+                    </div>
+                  ))
+                )}
               </div>
             </section>
           )}
