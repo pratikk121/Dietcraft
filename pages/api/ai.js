@@ -112,35 +112,43 @@ Return a JSON array of meal assignments:
       return res.status(400).json({ error: 'Unknown action: ' + action });
     }
 
-    // Target gemini-3.8-flash directly with a generous 25-second timeout
-    const targetModel = 'gemini-3.8-flash';
-    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${targetModel}:generateContent?key=${activeKey}`;
+    // Verified active models on Google Gemini API for your key:
+    const models = ['gemini-flash-latest', 'gemini-flash-lite-latest', 'gemini-pro-latest'];
+    let candidateText = null;
+    let lastError = null;
 
-    const response = await fetch(geminiUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      signal: AbortSignal.timeout(25000),
-      body: JSON.stringify({
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        generationConfig: {
-          temperature: 0.2,
-          maxOutputTokens: 2000
+    for (const model of models) {
+      try {
+        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${activeKey}`;
+        const response = await fetch(geminiUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: AbortSignal.timeout(20000),
+          body: JSON.stringify({
+            contents: [{ role: 'user', parts: [{ text: prompt }] }],
+            generationConfig: {
+              temperature: 0.2,
+              maxOutputTokens: 2500
+            }
+          })
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          candidateText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+          if (candidateText) break;
+        } else {
+          const errData = await response.json().catch(() => ({}));
+          lastError = errData.error?.message || response.statusText;
         }
-      })
-    });
-
-    if (!response.ok) {
-      const errData = await response.json().catch(() => ({}));
-      const msg = errData.error?.message || response.statusText;
-      return res.status(response.status).json({ error: `Gemini (${targetModel}) Error: ${msg}` });
+      } catch (e) {
+        lastError = e.message;
+      }
     }
-
-    const data = await response.json();
-    candidateText = data.candidates?.[0]?.content?.parts?.[0]?.text;
 
     if (!candidateText) {
       return res.status(500).json({ 
-        error: `Gemini Error: ${lastError || 'Could not generate content with available models'}. Discovered models: [${availableModels.slice(0, 5).join(', ')}]` 
+        error: `Gemini Error: ${lastError || 'Could not generate content'}` 
       });
     }
 
