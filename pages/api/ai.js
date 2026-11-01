@@ -112,74 +112,54 @@ Return a JSON array of meal assignments:
       return res.status(400).json({ error: 'Unknown action: ' + action });
     }
 
-    // Dynamically discover which models are enabled for this API key
-    let candidateText = null;
-    let lastError = null;
-
-    // 1. Try querying the user's available model list
-    let availableModels = [];
+    // Determine target model directly
+    let targetModel = 'gemini-2.5-flash';
     try {
-      const listRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${activeKey}`);
+      const listRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${activeKey}`, {
+        signal: AbortSignal.timeout(3500)
+      });
       if (listRes.ok) {
         const listData = await listRes.json();
-        if (listData.models && Array.isArray(listData.models)) {
-          availableModels = listData.models
-            .filter(m => m.supportedGenerationMethods && m.supportedGenerationMethods.includes('generateContent'))
-            .map(m => m.name.replace(/^models\//, ''));
-        }
-      } else {
-        const errJson = await listRes.json().catch(() => ({}));
-        lastError = errJson.error?.message || `HTTP ${listRes.status}`;
+        const available = (listData.models || [])
+          .filter(m => m.supportedGenerationMethods && m.supportedGenerationMethods.includes('generateContent'))
+          .map(m => m.name.replace(/^models\//, ''));
+
+        // Pick the fastest available flash model
+        const preferred = available.find(m => m === 'gemini-2.5-flash') ||
+                          available.find(m => m === 'gemini-2.0-flash') ||
+                          available.find(m => m === 'gemini-1.5-flash') ||
+                          available.find(m => m.includes('flash')) ||
+                          available[0];
+        if (preferred) targetModel = preferred;
       }
     } catch (e) {
-      lastError = e.message;
+      // fallback to gemini-2.5-flash if listModels times out
+      targetModel = 'gemini-2.5-flash';
     }
 
-    // Default priority list if listModels is empty or restricted
-    const priorityFallbacks = [
-      'gemini-2.0-flash',
-      'gemini-2.5-flash',
-      'gemini-1.5-flash',
-      'gemini-1.5-flash-8b',
-      'gemini-1.5-pro'
-    ];
-
-    // Combine discovered models with priority fallbacks
-    const modelsToTry = [
-      ...availableModels.filter(m => m.includes('flash') || m.includes('2.0') || m.includes('1.5')),
-      ...availableModels,
-      ...priorityFallbacks
-    ];
-    // Deduplicate
-    const uniqueModels = [...new Set(modelsToTry)];
-
-    for (const model of uniqueModels) {
-      try {
-        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${activeKey}`;
-        const response = await fetch(geminiUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{ role: 'user', parts: [{ text: prompt }] }],
-            generationConfig: {
-              temperature: 0.3,
-              maxOutputTokens: 3000
-            }
-          })
-        });
-
-        if (response.ok) {
-          const data = await response.json();
-          candidateText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-          if (candidateText) break;
-        } else {
-          const errData = await response.json().catch(() => ({}));
-          lastError = errData.error?.message || response.statusText;
+    // Call chosen model directly with 10s timeout
+    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${targetModel}:generateContent?key=${activeKey}`;
+    const response = await fetch(geminiUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(10000),
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        generationConfig: {
+          temperature: 0.2,
+          maxOutputTokens: 2000
         }
-      } catch (e) {
-        lastError = e.message;
-      }
+      })
+    });
+
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}));
+      const msg = errData.error?.message || response.statusText;
+      return res.status(response.status).json({ error: `Gemini (${targetModel}) Error: ${msg}` });
     }
+
+    const data = await response.json();
+    candidateText = data.candidates?.[0]?.content?.parts?.[0]?.text;
 
     if (!candidateText) {
       return res.status(500).json({ 
