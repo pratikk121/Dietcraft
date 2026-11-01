@@ -6,8 +6,8 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { action, payload, apiKey } = req.body;
-  const activeKey = apiKey || process.env.GEMINI_API_KEY;
+  const { action, payload, apiKey, userApiKey } = req.body;
+  const activeKey = apiKey || userApiKey || process.env.GEMINI_API_KEY;
 
   if (!activeKey) {
     return res.status(400).json({
@@ -17,13 +17,15 @@ export default async function handler(req, res) {
 
   try {
     let prompt = '';
-    let systemInstruction = 'You are a professional Michelin-trained chef and registered dietitian. Always respond with clean, valid JSON only without markdown code blocks, backticks, or preamble.';
+    const systemInstruction = 'You are a professional Michelin-trained chef and registered dietitian. Always respond with clean, valid JSON only without markdown code blocks, backticks, or preamble.';
 
     if (action === 'suggest_from_pantry') {
-      const { pantryItems, preferences } = payload;
+      const pantryItems = payload.pantry || payload.pantryItems || [];
+      const preferences = payload.preferences || '';
       const itemsList = pantryItems.map(p => `${p.name} (${p.quantity} ${p.unit})`).join(', ');
 
-      prompt = `
+      prompt = `${systemInstruction}
+
 Given these available ingredients in the user's pantry/fridge:
 ${itemsList || 'Basic kitchen essentials'}
 
@@ -39,14 +41,27 @@ For each recipe, specify:
 - cook_time: number (minutes)
 - servings: number
 - instructions: string (step by step)
-- tags: comma separated string
-- ingredients: array of objects { name: string, quantity: number, unit: string, category: "Produce"|"Meat/Seafood"|"Dairy"|"Bakery"|"Pantry"|"Spices"|"Canned"|"Frozen"|"Other", alreadyInPantry: boolean }
+- used_pantry_items: array of ingredient name strings from the pantry
+- missing_items: array of strings (optional pantry staples or missing ingredients)
 
-Respond ONLY with a JSON array of the 3 recipe objects. Do not include markdown formatting or backticks.
-`;
+Respond ONLY with a JSON array of the 3 recipe objects:
+[
+  {
+    "title": "...",
+    "description": "...",
+    "category": "Dinner",
+    "prep_time": 10,
+    "cook_time": 15,
+    "servings": 2,
+    "instructions": "Step 1...",
+    "used_pantry_items": ["..."],
+    "missing_items": ["..."]
+  }
+]`;
     } else if (action === 'parse_recipe') {
-      const { rawText } = payload;
-      prompt = `
+      const rawText = payload.text || payload.rawText || '';
+      prompt = `${systemInstruction}
+
 Extract and structure this raw recipe text into a clean DietCraft recipe JSON object:
 """
 ${rawText}
@@ -65,79 +80,97 @@ Format strictly as:
   "ingredients": [
     { "name": string, "quantity": number, "unit": string, "category": "Produce"|"Meat/Seafood"|"Dairy"|"Bakery"|"Pantry"|"Spices"|"Canned"|"Frozen"|"Other" }
   ]
-}
-
-Respond ONLY with the JSON object. Do not include markdown formatting or backticks.
-`;
+}`;
     } else if (action === 'smart_plan') {
-      const { availableRecipes, pantryItems, daysCount, targetCalories, focus } = payload;
-      const recipeNames = availableRecipes.map(r => `ID: ${r.id}, Title: ${r.title}, Category: ${r.category}`).join('\n');
-      const pantryNames = pantryItems.map(p => p.name).join(', ');
+      const { startDate, endDate, pantry = [], recipes = [], mealsToPlan = ['dinner'], dietaryNotes = '' } = payload;
+      const recipeNames = recipes.map(r => `ID: ${r.id}, Title: ${r.title}, Category: ${r.category}`).join('\n');
+      const pantryNames = pantry.map(p => `${p.name} (${p.quantity} ${p.unit})`).join(', ');
 
-      prompt = `
+      prompt = `${systemInstruction}
+
 Given the user's recipe database:
-${recipeNames || 'No recipes yet, suggest common meals'}
+${recipeNames || 'No existing recipes, suggest healthy everyday home-cooked dishes'}
 
 Available pantry items:
-${pantryNames || 'Standard ingredients'}
+${pantryNames || 'Standard kitchen ingredients'}
 
-Plan meals for ${daysCount || 7} days with focus: "${focus || 'Balanced nutrition'}".
+Plan meals between ${startDate} and ${endDate} for meal slots: ${mealsToPlan.join(', ')}.
+Dietary notes/goals: "${dietaryNotes || 'Balanced nutrition'}".
+
+Prioritize using pantry items before they expire.
 Return a JSON array of meal assignments:
 [
   {
-    "day_offset": number (0 to ${daysCount - 1}),
+    "date": "YYYY-MM-DD",
     "meal_type": "breakfast" | "lunch" | "dinner",
-    "recipe_id": number or null,
-    "custom_title": string (if not from existing recipes),
+    "recipe_id": number or null (use matching ID if picked from recipe database, or null if suggested new),
+    "meal_name": string,
     "reasoning": string
   }
-]
-
-Respond ONLY with the JSON array. Do not include markdown formatting or backticks.
-`;
+]`;
     } else {
       return res.status(400).json({ error: 'Unknown action: ' + action });
     }
 
-    // Call Google Gemini API
-    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${activeKey}`;
+    // Call Google Gemini API (tries gemini-2.5-flash, fallback to gemini-1.5-flash)
+    const models = ['gemini-2.5-flash', 'gemini-1.5-flash'];
+    let lastError = null;
+    let candidateText = null;
 
-    const response = await fetch(geminiUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [
-          {
-            role: 'user',
-            parts: [{ text: prompt }]
-          }
-        ],
-        generationConfig: {
-          temperature: 0.4,
-          maxOutputTokens: 3000
+    for (const model of models) {
+      try {
+        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${activeKey}`;
+        const response = await fetch(geminiUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ role: 'user', parts: [{ text: prompt }] }],
+            generationConfig: {
+              temperature: 0.3,
+              maxOutputTokens: 3000
+            }
+          })
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          candidateText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+          if (candidateText) break;
+        } else {
+          const errData = await response.json().catch(() => ({}));
+          lastError = errData.error?.message || response.statusText;
         }
-      })
-    });
-
-    if (!response.ok) {
-      const errData = await response.json().catch(() => ({}));
-      const msg = errData.error?.message || response.statusText;
-      return res.status(response.status).json({ error: `Gemini API Error: ${msg}` });
+      } catch (e) {
+        lastError = e.message;
+      }
     }
 
-    const data = await response.json();
-    const candidateText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-
     if (!candidateText) {
-      return res.status(500).json({ error: 'No response content returned from Gemini' });
+      return res.status(500).json({ error: `Gemini Error: ${lastError || 'No response returned from Gemini'}` });
     }
 
     // Clean JSON response (strip markdown fences if present)
     let cleaned = candidateText.trim();
-    if (cleaned.startsWith('```json')) cleaned = cleaned.replace(/^```json\s*/, '').replace(/```$/, '');
-    else if (cleaned.startsWith('```')) cleaned = cleaned.replace(/^```\s*/, '').replace(/```$/, '');
+    if (cleaned.startsWith('```json')) cleaned = cleaned.replace(/^```json\s*/i, '').replace(/```$/i, '');
+    else if (cleaned.startsWith('```')) cleaned = cleaned.replace(/^```\s*/i, '').replace(/```$/i, '');
 
     const parsedJson = JSON.parse(cleaned.trim());
+
+    // Normalize output structure for client
+    if (action === 'suggest_from_pantry') {
+      return res.status(200).json({
+        suggestions: Array.isArray(parsedJson) ? parsedJson : (parsedJson.suggestions || parsedJson.recipes || [parsedJson])
+      });
+    } else if (action === 'parse_recipe') {
+      return res.status(200).json({
+        recipe: parsedJson.recipe || parsedJson
+      });
+    } else if (action === 'smart_plan') {
+      return res.status(200).json({
+        plan: Array.isArray(parsedJson) ? parsedJson : (parsedJson.plan || [parsedJson])
+      });
+    }
+
     return res.status(200).json({ result: parsedJson });
 
   } catch (err) {
